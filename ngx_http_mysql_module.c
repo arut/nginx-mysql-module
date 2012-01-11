@@ -25,7 +25,7 @@ OF SUCH DAMAGE.
 *******************************************************************************/
 
 /*
-     NGINX MySQL module
+   NGINX MySQL module
 
    * Makes use of libmysqlclient.so
    * Completely asynchronous
@@ -143,6 +143,13 @@ ngx_module_t ngx_http_mysql_module = {
 #define NGXCSTR(s) ((s).data ? strndupa((char*)(s).data, (s).len) : NULL)
 
 ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
+
+	/* NB:
+	   Remember this handler is completely ASYNCHRONOUS 
+	   when used with nginx-mtask-module;
+	   Blocking calls are intercepted to switch user-space
+	   context to NGINX event cycle.
+	 */
 
 	ngx_http_mysql_loc_conf_t *mslcf;
 	ngx_str_t query;
@@ -268,9 +275,10 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 				prev = node;
 			}
 		}
+
+		mysql_free_result(res);
 	}
 
-	mysql_free_result(res);
 	mysql_close(sock);
 
 	if (out == NULL) {
