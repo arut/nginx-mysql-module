@@ -39,17 +39,15 @@ OF SUCH DAMAGE.
 #include <mysql.h>
 #include <ngx_http_mtask_module.h>
 
+static void* ngx_http_mysql_create_srv_conf(ngx_conf_t *cf);
+static char* ngx_http_mysql_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
+
 static void* ngx_http_mysql_create_loc_conf(ngx_conf_t *cf);
 static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
+
 static char* ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
 struct ngx_http_mysql_loc_conf_s {
-
-	ngx_str_t host;
-	ngx_int_t port;
-	ngx_str_t user;
-	ngx_str_t password;
-	ngx_str_t database;
 
 	ngx_array_t *query_lengths;
 	ngx_array_t *query_values;
@@ -57,45 +55,75 @@ struct ngx_http_mysql_loc_conf_s {
 
 typedef struct ngx_http_mysql_loc_conf_s ngx_http_mysql_loc_conf_t;
 
+struct ngx_http_mysql_node_s {
+
+	MYSQL mysql;
+
+	unsigned ready:1;
+
+	struct ngx_http_mysql_node_s *next;
+};
+
+typedef struct ngx_http_mysql_node_s ngx_http_mysql_node_t;
+
+struct ngx_http_mysql_srv_conf_s {
+
+	ngx_str_t host;
+	ngx_int_t port;
+	ngx_str_t user;
+	ngx_str_t password;
+	ngx_str_t database;
+
+	ngx_int_t max_conn;
+
+	ngx_http_mysql_node_t *nodes;
+	ngx_http_mysql_node_t *free_node;
+};
+
+typedef struct ngx_http_mysql_srv_conf_s ngx_http_mysql_srv_conf_t;
+
 static ngx_command_t ngx_http_mysql_commands[] = {
 
 	{	ngx_string("mysql_host"),
-		NGX_HTTP_LOC_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+		NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
 		ngx_conf_set_str_slot,
-		NGX_HTTP_LOC_CONF_OFFSET,
-		offsetof(ngx_http_mysql_loc_conf_t, host),
+		NGX_HTTP_SRV_CONF_OFFSET,
+		offsetof(ngx_http_mysql_srv_conf_t, host),
 		NULL },
 
 	{	ngx_string("mysql_port"),
-		NGX_HTTP_LOC_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_SRV_CONF|
-			NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+		NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
 		ngx_conf_set_num_slot,
-		NGX_HTTP_LOC_CONF_OFFSET,
-		offsetof(ngx_http_mysql_loc_conf_t, port),
+		NGX_HTTP_SRV_CONF_OFFSET,
+		offsetof(ngx_http_mysql_srv_conf_t, port),
 		NULL },
 
 	{	ngx_string("mysql_user"),
-		NGX_HTTP_LOC_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_SRV_CONF|
-			NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+		NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
 		ngx_conf_set_str_slot,
-		NGX_HTTP_LOC_CONF_OFFSET,
-		offsetof(ngx_http_mysql_loc_conf_t, user),
+		NGX_HTTP_SRV_CONF_OFFSET,
+		offsetof(ngx_http_mysql_srv_conf_t, user),
 		NULL },
 
 	{	ngx_string("mysql_password"),
-		NGX_HTTP_LOC_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_SRV_CONF|
-			NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+		NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
 		ngx_conf_set_str_slot,
-		NGX_HTTP_LOC_CONF_OFFSET,
-		offsetof(ngx_http_mysql_loc_conf_t, password),
+		NGX_HTTP_SRV_CONF_OFFSET,
+		offsetof(ngx_http_mysql_srv_conf_t, password),
 		NULL },
 
 	{	ngx_string("mysql_database"),
-		NGX_HTTP_LOC_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_SRV_CONF|
-			NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+		NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
 		ngx_conf_set_str_slot,
-		NGX_HTTP_LOC_CONF_OFFSET,
-		offsetof(ngx_http_mysql_loc_conf_t, database),
+		NGX_HTTP_SRV_CONF_OFFSET,
+		offsetof(ngx_http_mysql_srv_conf_t, database),
+		NULL },
+
+	{	ngx_string("mysql_connections"),
+		NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+		ngx_conf_set_num_slot,
+		NGX_HTTP_SRV_CONF_OFFSET,
+		offsetof(ngx_http_mysql_srv_conf_t, max_conn),
 		NULL },
 
 	/* Queries support shell-style substitutions 
@@ -105,7 +133,7 @@ static ngx_command_t ngx_http_mysql_commands[] = {
 	 */
 
 	{	ngx_string("mysql_query"),
-		NGX_HTTP_LOC_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+		NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
 		ngx_http_mysql_query,
 		NGX_HTTP_LOC_CONF_OFFSET,
 		0,
@@ -121,8 +149,8 @@ static ngx_http_module_t ngx_http_mysql_module_ctx = {
 	NULL,                               /* postconfiguration */
 	NULL,                               /* create main configuration */
 	NULL,                               /* init main configuration */
-	NULL,                               /* create server configuration */
-	NULL,                               /* merge server configuration */
+	ngx_http_mysql_create_srv_conf,     /* create server configuration */
+	ngx_http_mysql_merge_srv_conf,      /* merge server configuration */
 	ngx_http_mysql_create_loc_conf,     /* create location configuration */
 	ngx_http_mysql_merge_loc_conf       /* merge location configuration */
 };
@@ -156,6 +184,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 	 */
 
 	ngx_http_mysql_loc_conf_t *mslcf;
+	ngx_http_mysql_srv_conf_t *msscf;
 	ngx_str_t query;
 	MYSQL mysql, *sock;
 	MYSQL_RES *res;
@@ -165,7 +194,11 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 	int n, num_fields;
 	ngx_chain_t *out, *node, *prev;
 	uint64_t auto_id;
+	ngx_http_mysql_node_t *mnode;
+	ngx_int_t ret;
 
+	msscf = ngx_http_get_module_srv_conf(r, ngx_http_mysql_module);
+	
 	mslcf = ngx_http_get_module_loc_conf(r, ngx_http_mysql_module);
 
 	if (ngx_http_script_run(r, &query, mslcf->query_lengths->elts, 0,
@@ -174,37 +207,72 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 		return NGX_ERROR;
 	}
 
-	/* TODO: we need connection pool here */
-	
-	mysql_init(&mysql);
-
-	if (!(sock = mysql_real_connect(&mysql,
-				NGXCSTR(mslcf->host), 
-				NGXCSTR(mslcf->user), 
-				NGXCSTR(mslcf->password),
-				NGXCSTR(mslcf->database), 
-				mslcf->port == NGX_CONF_UNSET ? 0 : mslcf->port, 
-				NULL, 0))) 
+	if (msscf->max_conn != NGX_CONF_UNSET 
+			&& msscf->max_conn) 
 	{
+		/* take connection from pool */
 
-		ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
-				"Couldn't connect to MySQL engine: %s",
-				mysql_error(&mysql));
-		
-		return NGX_ERROR;
+		if (msscf->free_node == NULL) {
+
+			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+					"Not enough MySQL connections: %d", msscf->max_conn);
+
+			return NGX_ERROR;
+		}
+
+		mnode = msscf->free_node;
+
+		msscf->free_node = msscf->free_node->next;
+
+		sock = &mnode->mysql;
+
+	} else {
+
+		/* connection-per-request */
+
+		mnode = NULL;
+
+		sock = &mysql;
 	}
 
-	mysql.reconnect = 1;
+	ret = NGX_ERROR;
+
+	if (mnode == NULL || !mnode->ready) {
+
+		ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+				"Connecting to MySQL");
+
+		mysql_init(sock);
+
+		if (!(sock = mysql_real_connect(sock,
+						NGXCSTR(msscf->host), 
+						NGXCSTR(msscf->user), 
+						NGXCSTR(msscf->password),
+						NGXCSTR(msscf->database), 
+						msscf->port == NGX_CONF_UNSET ? 0 : msscf->port, 
+						NULL, 0))) 
+		{
+
+			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+					"Couldn't connect to MySQL engine: %s",
+					mysql_error(&mysql));
+
+			goto quit;
+		}
+
+		mysql.reconnect = 1;
+
+		if (mnode)
+			mnode->ready = 1;
+	}
 
 	if (mysql_query(sock, NGXCSTR(query))) {
 
-		mysql_close(sock);
-		
 		ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 				"MySQL query failed (%s)",
 				mysql_error(sock));
 
-		return NGX_ERROR;
+		goto quit;
 	}
 
 	out = NULL;
@@ -235,13 +303,11 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 		if (!(res = mysql_store_result(sock))) {
 
-			mysql_close(sock);
-
 			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 					"Couldn't get MySQL result from %s",
 					mysql_error(sock));
 
-			return NGX_ERROR;
+			goto quit;
 		}
 
 		num_fields = mysql_num_fields(res);
@@ -285,8 +351,6 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 		mysql_free_result(res);
 	}
 
-	mysql_close(sock);
-
 	if (out == NULL) {
 
 		/* no result */
@@ -302,22 +366,39 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 	ngx_http_output_filter(r, out);
 
-	return NGX_OK;
+	ret = NGX_OK;
+
+quit:
+
+	if (mnode != NULL) {
+
+		mnode->next = msscf->free_node;
+		msscf->free_node = mnode;
+
+	} else
+		mysql_close(sock);
+
+	return ret;
 }
 
-static void* ngx_http_mysql_create_loc_conf(ngx_conf_t *cf)
+static void* ngx_http_mysql_create_srv_conf(ngx_conf_t *cf)
 {
-	ngx_http_mysql_loc_conf_t *conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_mysql_loc_conf_t));
+	ngx_http_mysql_srv_conf_t *conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_mysql_srv_conf_t));
 	
 	conf->port = NGX_CONF_UNSET;
+
+	conf->max_conn = NGX_CONF_UNSET;
 
 	return conf;
 }
 
-static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
+static char* ngx_http_mysql_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 {
-	ngx_http_mysql_loc_conf_t *prev = parent;
-	ngx_http_mysql_loc_conf_t *conf = child;
+	ngx_http_mysql_srv_conf_t *prev = parent;
+	ngx_http_mysql_srv_conf_t *conf = child;
+	ngx_int_t n;
+
+	ngx_log_debug(NGX_LOG_INFO, cf->log, 0, "mysql merge srv");
 
 	ngx_conf_merge_str_value(conf->host,
 			prev->host, NULL);
@@ -334,6 +415,45 @@ static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *c
 	ngx_conf_merge_str_value(conf->database,
 			prev->database, NULL);
 
+
+	if (conf->max_conn != NGX_CONF_UNSET) {
+
+		conf->nodes = ngx_palloc(cf->pool, 
+				conf->max_conn * sizeof(ngx_http_mysql_node_t));
+
+		conf->free_node = conf->nodes;
+
+		for(n = 0; n < conf->max_conn; ++n)
+			conf->nodes[n].next = conf->nodes + n + 1;
+
+		conf->nodes[conf->max_conn - 1].next = NULL;
+
+	} else if (prev->max_conn != NGX_CONF_UNSET) {
+
+		conf->max_conn = prev->max_conn;
+
+		conf->nodes = prev->nodes;
+
+		conf->free_node = conf->nodes;
+	}
+
+	return NGX_CONF_OK;
+}
+
+static void* ngx_http_mysql_create_loc_conf(ngx_conf_t *cf)
+{
+	ngx_http_mysql_loc_conf_t *conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_mysql_loc_conf_t));
+	
+	return conf;
+}
+
+static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
+{
+	ngx_http_mysql_loc_conf_t *prev = parent;
+	ngx_http_mysql_loc_conf_t *conf = child;
+
+	ngx_log_debug(NGX_LOG_INFO, cf->log, 0, "mysql merge loc");
+
 	if (conf->query_lengths == NULL)
 		conf->query_lengths = prev->query_lengths;
 
@@ -345,8 +465,8 @@ static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *c
 
 static char * ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
-	ngx_http_mtask_loc_conf_t *mlcf = conf;
 	ngx_http_mysql_loc_conf_t *mslcf = conf;
+	ngx_http_mtask_loc_conf_t *mlcf;
 	ngx_str_t *query;
 	ngx_uint_t n;
 	ngx_http_script_compile_t sc;
@@ -354,8 +474,6 @@ static char * ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *con
 
 	mlcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_mtask_module);
 	mlcf->handler = &ngx_http_mysql_handler;
-
-	mslcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_mysql_module);
 
 	value = cf->args->elts;
 	query = &value[1];

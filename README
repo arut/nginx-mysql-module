@@ -48,6 +48,8 @@ http {
 		#mysql_port theport;
 
 		mysql_database test;
+		mysql_connections 32;
+
 		mtask_stack 65536;
 
 
