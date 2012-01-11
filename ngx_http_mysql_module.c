@@ -142,7 +142,7 @@ ngx_module_t ngx_http_mysql_module = {
 
 #define NGXCSTR(s) ((s).data ? strndupa((char*)(s).data, (s).len) : NULL)
 
-ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r, ngx_chain_t **out) {
+ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 	ngx_http_mysql_loc_conf_t *mslcf;
 	ngx_str_t query;
@@ -152,7 +152,8 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r, ngx_chain_t **out) {
 	char *value;
 	size_t len;
 	int n, num_fields;
-	ngx_chain_t *node, *prev;
+	ngx_chain_t *out, *node, *prev;
+	uint64_t auto_id;
 
 	mslcf = ngx_http_get_module_loc_conf(r, ngx_http_mysql_module);
 
@@ -195,54 +196,98 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r, ngx_chain_t **out) {
 		return NGX_ERROR;
 	}
 
-    if (!(res = mysql_store_result(sock))) {
+	out = NULL;
 
-		mysql_close(sock);
-		
-		ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
-				"Couldn't get MySQL result from %s",
-				mysql_error(sock));
-		
-		return NGX_ERROR;
-	}
+	if (!mysql_field_count(sock)) {
 
-	num_fields = mysql_num_fields(res);
-	
-	prev = NULL;
+		/* no data returned 
+		 check if there's auto-id pending */
 
-	while((row = mysql_fetch_row(res))) {
-		
-		for(n = 0; n < num_fields; ++n) {
-		
-			value = row[n];
+		auto_id = mysql_insert_id(sock);
 
-			len = value ? strlen(value) : 0;
+		if (auto_id) {
 
-			node = (ngx_chain_t*)ngx_palloc(r->pool, sizeof(ngx_chain_t));
-			node->next = NULL;
-			node->buf = ngx_create_temp_buf(r->pool, len + 1);
-	
-			if (value)
-				memcpy(node->buf->pos, value, len);
+			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+					"MySQL auto-inserted id=%uL", auto_id);
 
-			node->buf->pos[len] = '\n';
-			node->buf->last += ++len;
+			out = (ngx_chain_t*)ngx_palloc(r->pool, sizeof(ngx_chain_t));
+			out->next = NULL;
 
-			if (prev)
-				prev->next = node;
+			out->buf = ngx_create_temp_buf(r->pool, 32);
+			out->buf->last = ngx_slprintf(out->buf->pos, out->buf->end, "%uL\n", auto_id);
 
-			else if (*out)
-				*out = node;
+		}
 
-			prev = node;
+	} else {
+
+		if (!(res = mysql_store_result(sock))) {
+
+			/* no result
+			   return auto insert id for the case of insert */
+
+			mysql_close(sock);
+
+			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+					"Couldn't get MySQL result from %s",
+					mysql_error(sock));
+
+			return NGX_ERROR;
+		}
+
+		num_fields = mysql_num_fields(res);
+
+		prev = NULL;
+
+		while((row = mysql_fetch_row(res))) {
+
+			for(n = 0; n < num_fields; ++n) {
+
+				value = row[n];
+
+				ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+					"MySQL value returned '%s'", value);
+
+				len = value ? strlen(value) : 0;
+
+				node = (ngx_chain_t*)ngx_palloc(r->pool, sizeof(ngx_chain_t));
+				node->next = NULL;
+				node->buf = ngx_create_temp_buf(r->pool, len + 1);
+
+				if (value)
+					memcpy(node->buf->pos, value, len);
+
+				node->buf->pos[len] = '\n';
+				node->buf->last += ++len;
+
+				if (prev)
+					prev->next = node;
+
+				else
+					out = node;
+
+				prev = node;
+			}
 		}
 	}
 
-	if (prev)
-		prev->buf->last_buf = 1;
-	
 	mysql_free_result(res);
 	mysql_close(sock);
+
+	if (out == NULL) {
+
+		/* no result */
+
+		out = (ngx_chain_t*)ngx_palloc(r->pool, sizeof(ngx_chain_t));
+		out->next = NULL;
+		out->buf = ngx_create_temp_buf(r->pool, 2);
+		*out->buf->last++ = '\n';
+
+	}
+
+	ngx_http_send_header(r);
+
+	out->buf->last_buf = 1;
+	ngx_http_output_filter(r, out);
 
 	return NGX_OK;
 }
