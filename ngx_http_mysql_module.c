@@ -423,7 +423,7 @@ static char* ngx_http_mysql_merge_srv_conf(ngx_conf_t *cf, void *parent, void *c
 
 		conf->free_node = conf->nodes;
 
-		for(n = 0; n < conf->max_conn; ++n)
+		for(n = 0; n < conf->max_conn - 1; ++n)
 			conf->nodes[n].next = conf->nodes + n + 1;
 
 		conf->nodes[conf->max_conn - 1].next = NULL;
