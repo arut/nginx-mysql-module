@@ -223,14 +223,13 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 			out->buf = ngx_create_temp_buf(r->pool, 32);
 			out->buf->last = ngx_slprintf(out->buf->pos, out->buf->end, "%uL\n", auto_id);
 
+			out->buf->last_buf = 1;
+
 		}
 
 	} else {
 
 		if (!(res = mysql_store_result(sock))) {
-
-			/* no result
-			   return auto insert id for the case of insert */
 
 			mysql_close(sock);
 
@@ -276,6 +275,9 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 			}
 		}
 
+		if (prev)
+			prev->buf->last_buf = 1;
+
 		mysql_free_result(res);
 	}
 
@@ -287,14 +289,13 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 		out = (ngx_chain_t*)ngx_palloc(r->pool, sizeof(ngx_chain_t));
 		out->next = NULL;
-		out->buf = ngx_create_temp_buf(r->pool, 2);
+		out->buf = ngx_create_temp_buf(r->pool, 1);
 		*out->buf->last++ = '\n';
-
+		out->buf->last_buf = 1;
 	}
 
 	ngx_http_send_header(r);
 
-	out->buf->last_buf = 1;
 	ngx_http_output_filter(r, out);
 
 	return NGX_OK;

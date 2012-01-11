@@ -36,6 +36,20 @@ http {
 
 		...
 
+		location ~ /all {
+
+			mysql_host 127.0.0.1;
+
+			#mysql_user theuser;
+			#mysql_password thepass;
+			#mysql_port theport;
+
+			mysql_database test;
+			mtask_stack 65536;
+
+			mysql_query "SELECT name FROM users WHERE id='$arg_id'";
+		}
+
 		location ~ /select.* {
 
 			mysql_host 127.0.0.1;
@@ -62,6 +76,34 @@ http {
 			mtask_stack 65536;
 
 			mysql_query "INSERT INTO users(name) VALUES('$arg_name')";
+		}
+
+		location ~ /update.* {
+
+			mysql_host 127.0.0.1;
+
+			#mysql_user theuser;
+			#mysql_password thepass;
+			#mysql_port theport;
+
+			mysql_database test;
+			mtask_stack 65536;
+
+			mysql_query "UPDATE users SET name='$arg_name' WHERE id=$arg_id";
+		}
+
+		location ~ /delete.* {
+
+			mysql_host 127.0.0.1;
+
+			#mysql_user theuser;
+			#mysql_password thepass;
+			#mysql_port theport;
+
+			mysql_database test;
+			mtask_stack 65536;
+
+			mysql_query "DELETE FROM users WHERE id=$arg_id";
 		}
 
 		...
