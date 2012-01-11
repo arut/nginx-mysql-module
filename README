@@ -1,5 +1,7 @@
 nginx-mysql-module
 
+(c) 2012 Arutyunyan Roman (arut@qip.ru)
+
 == MySQL support in NGINX ==
 
 * this module is asynchronous (non-blocking)
