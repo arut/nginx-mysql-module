@@ -6,6 +6,7 @@ nginx-mysql-module
 
 * this module is asynchronous (non-blocking)
 * requires nginx-mtask-module (https://github.com/arut/nginx-mtask-module)
+* requires standard MySQL client shared library libmysqlclient.so
 
 
 NGINX configure:
@@ -20,9 +21,9 @@ MySQL:
 	USE test;
 
 	CREATE TABLE `users` (
-		    `name` varchar(128) DEFAULT NULL,
+			`name` varchar(128) DEFAULT NULL,
 			`id` int(11) NOT NULL auto_increment,  PRIMARY KEY (`id`)
-			) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+	) ENGINE=MyISAM DEFAULT CHARSET=utf8;
 
 
 nginx.conf:
