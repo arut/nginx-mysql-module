@@ -121,5 +121,16 @@ access:
 
  curl 'localhost:8080/select?id=11'
  foo
+ 
+ curl 'localhost:8080/update?id=11&name=bar'
+ <nothing>
 
+ curl 'localhost:8080/select?id=11'
+ bar
+
+ curl 'localhost:8080/delete?id=11'
+ <nothing>
+ 
+ curl 'localhost:8080/select?id=11'
+ <nothing>
 
