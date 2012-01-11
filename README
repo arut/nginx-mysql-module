@@ -1,0 +1,80 @@
+nginx-mysql-module
+
+== MySQL support in NGINX ==
+
+* this module is asynchronous (non-blocking)
+* requires nginx-mtask-module (https://github.com/arut/nginx-mtask-module)
+
+
+NGINX configure:
+
+./configure --add-module=/home/rarutyunyan/nginx-mtask-module --add-module=/home/rarutyunyan/nginx-mysql-module
+
+
+Usage examples:
+
+MySQL:
+	
+	USE test;
+
+	CREATE TABLE `users` (
+		    `name` varchar(128) DEFAULT NULL,
+			`id` int(11) NOT NULL auto_increment,  PRIMARY KEY (`id`)
+			) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+
+nginx.conf:
+
+http {
+
+	...
+
+	server {
+
+		...
+
+		location ~ /select.* {
+
+			mysql_host 127.0.0.1;
+			
+			#mysql_user theuser;
+			#mysql_password thepass;
+			#mysql_port theport;
+
+			mysql_database test;
+			mtask_stack 65536;
+
+			mysql_query "SELECT name FROM users WHERE id='$arg_id'";
+		}
+
+		location ~ /insert.* {
+
+			mysql_host 127.0.0.1;
+			
+			#mysql_user theuser;
+			#mysql_password thepass;
+			#mysql_port theport;
+
+			mysql_database test;
+			mtask_stack 65536;
+
+			mysql_query "INSERT INTO users(name) VALUES('$arg_name')";
+		}
+
+		...
+	}
+
+	...
+
+}
+
+
+access:
+
+ curl 'localhost:8080/insert?name=foo'
+ 11
+
+ curl 'localhost:8080/select?id=11'
+ foo
+
+
