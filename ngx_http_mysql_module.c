@@ -418,15 +418,13 @@ static char* ngx_http_mysql_merge_srv_conf(ngx_conf_t *cf, void *parent, void *c
 
 	if (conf->max_conn != NGX_CONF_UNSET) {
 
-		conf->nodes = ngx_palloc(cf->pool, 
+		conf->nodes = ngx_pcalloc(cf->pool, 
 				conf->max_conn * sizeof(ngx_http_mysql_node_t));
 
 		conf->free_node = conf->nodes;
 
 		for(n = 0; n < conf->max_conn - 1; ++n)
 			conf->nodes[n].next = conf->nodes + n + 1;
-
-		conf->nodes[conf->max_conn - 1].next = NULL;
 
 	} else if (prev->max_conn != NGX_CONF_UNSET) {
 
