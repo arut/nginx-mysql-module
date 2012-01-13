@@ -255,12 +255,12 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 					"Couldn't connect to MySQL engine: %s",
-					mysql_error(&mysql));
+					mysql_error(sock));
 
 			goto quit;
 		}
 
-		mysql.reconnect = 1;
+		sock->reconnect = 1;
 
 		if (mnode)
 			mnode->ready = 1;
