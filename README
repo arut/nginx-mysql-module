@@ -97,7 +97,7 @@ http {
 			# mysql_query "INSERT INTO shows(id) VALUES('$arg_id')";
 			mysql_subrequest /insert_show?id=$arg_id;
 
-			reqrite ^(.*)$ /content last;
+			rewrite ^(.*)$ /content last;
 		}
 
 		location ~ /session.* {
