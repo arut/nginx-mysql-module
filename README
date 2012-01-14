@@ -83,7 +83,7 @@ http {
 
 			# register show in database
 			# need a location with this query:
-			# mysql_query "INSERT INTO shows(id) VALUES('$id') ON DUPLICATE KEY UPDATE SET count=count+1";
+			# mysql_query "INSERT INTO shows(id) VALUES('$id') ON DUPLICATE KEY UPDATE count=count+1";
 			mysql_subrequest /update_shows_in_mysql?id=$cookie_abcdef;
 
 			# output content
