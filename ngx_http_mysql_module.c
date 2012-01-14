@@ -46,11 +46,17 @@ static void* ngx_http_mysql_create_loc_conf(ngx_conf_t *cf);
 static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 
 static char* ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char* ngx_http_mysql_subrequest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+
+static ngx_int_t ngx_http_mysql_init(ngx_conf_t *cf);
 
 struct ngx_http_mysql_loc_conf_s {
 
 	ngx_array_t *query_lengths;
 	ngx_array_t *query_values;
+
+	ngx_array_t *subreq_lengths;
+	ngx_array_t *subreq_values;
 };
 
 typedef struct ngx_http_mysql_loc_conf_s ngx_http_mysql_loc_conf_t;
@@ -81,6 +87,14 @@ struct ngx_http_mysql_srv_conf_s {
 };
 
 typedef struct ngx_http_mysql_srv_conf_s ngx_http_mysql_srv_conf_t;
+
+struct ngx_http_mysql_ctx_s {
+
+	ngx_chain_t *subreq_out;
+
+};
+
+typedef struct ngx_http_mysql_ctx_s ngx_http_mysql_ctx_t;
 
 static ngx_command_t ngx_http_mysql_commands[] = {
 
@@ -139,6 +153,13 @@ static ngx_command_t ngx_http_mysql_commands[] = {
 		0,
 		NULL },
 
+	{	ngx_string("mysql_subrequest"),
+		NGX_HTTP_LOC_CONF|NGX_CONF_1MORE,
+		ngx_http_mysql_subrequest,
+		NGX_HTTP_LOC_CONF_OFFSET,
+		0,
+		NULL },
+
 	ngx_null_command
 };
 
@@ -146,7 +167,7 @@ static ngx_command_t ngx_http_mysql_commands[] = {
 static ngx_http_module_t ngx_http_mysql_module_ctx = {
 
 	NULL,                               /* preconfiguration */
-	NULL,                               /* postconfiguration */
+	ngx_http_mysql_init,                /* postconfiguration */
 	NULL,                               /* create main configuration */
 	NULL,                               /* init main configuration */
 	ngx_http_mysql_create_srv_conf,     /* create server configuration */
@@ -196,15 +217,21 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 	uint64_t auto_id;
 	ngx_http_mysql_node_t *mnode;
 	ngx_int_t ret;
+	ngx_http_mysql_ctx_t *ctx;
 
 	msscf = ngx_http_get_module_srv_conf(r, ngx_http_mysql_module);
 	
 	mslcf = ngx_http_get_module_loc_conf(r, ngx_http_mysql_module);
 
+	sock = NULL;
+	mnode = NULL;
+	out = NULL;
+	ret = NGX_ERROR;
+
 	if (ngx_http_script_run(r, &query, mslcf->query_lengths->elts, 0,
 				mslcf->query_values->elts) == NULL)
 	{
-		return NGX_ERROR;
+		goto quit;
 	}
 
 	if (msscf->max_conn != NGX_CONF_UNSET 
@@ -215,9 +242,9 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 		if (msscf->free_node == NULL) {
 
 			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
-					"Not enough MySQL connections: %d", msscf->max_conn);
+					"not enough MySQL connections: %d", msscf->max_conn);
 
-			return NGX_ERROR;
+			goto quit;
 		}
 
 		mnode = msscf->free_node;
@@ -230,17 +257,13 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 		/* connection-per-request */
 
-		mnode = NULL;
-
 		sock = &mysql;
 	}
-
-	ret = NGX_ERROR;
 
 	if (mnode == NULL || !mnode->ready) {
 
 		ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
-				"Connecting to MySQL");
+				"connecting to MySQL");
 
 		mysql_init(sock);
 
@@ -254,7 +277,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 		{
 
 			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
-					"Couldn't connect to MySQL engine: %s",
+					"couldn't connect to MySQL engine: %s",
 					mysql_error(sock));
 
 			goto quit;
@@ -304,7 +327,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 		if (!(res = mysql_store_result(sock))) {
 
 			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
-					"Couldn't get MySQL result from %s",
+					"couldn't get MySQL result from %s",
 					mysql_error(sock));
 
 			goto quit;
@@ -362,9 +385,13 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 		out->buf->last_buf = 1;
 	}
 
-	ngx_http_send_header(r);
 
-	ngx_http_output_filter(r, out);
+	if (!r->subrequest_in_memory) {
+		
+		ngx_http_send_header(r);
+
+		ngx_http_output_filter(r, out);
+	}
 
 	ret = NGX_OK;
 
@@ -375,10 +402,141 @@ quit:
 		mnode->next = msscf->free_node;
 		msscf->free_node = mnode;
 
-	} else
+	} else if (sock != NULL)
 		mysql_close(sock);
 
+	if (r->subrequest_in_memory) {
+
+		/* store result to be used by parent request;
+		   remember we have chain buffers organized by lines */
+
+		ctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
+
+		if (ctx == NULL) {
+
+			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+				"no context in subrequest");
+
+			return NGX_ERROR;
+		}
+
+		ctx->subreq_out = out;
+	}
+
 	return ret;
+}
+
+static ngx_int_t ngx_http_mysql_subrequest_handler(ngx_http_request_t *r)
+{
+	ngx_http_mysql_loc_conf_t *mslcf;
+	ngx_http_request_t *sr;
+	ngx_http_mysql_ctx_t *ctx;
+	u_char *q;
+	ngx_str_t uri;
+	ngx_str_t args = ngx_null_string;
+	
+	mslcf = ngx_http_get_module_loc_conf(r, ngx_http_mysql_module);
+
+	ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+			"mysql subrequest handler");
+
+	if (mslcf->subreq_values == NULL
+			|| mslcf->subreq_lengths == NULL)
+	{
+		return NGX_DECLINED;
+	}
+
+	ctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
+
+	if (ctx != NULL)
+		return NGX_DECLINED;
+
+	if (ngx_http_script_run(r, &uri, mslcf->subreq_lengths->elts, 0,
+				mslcf->subreq_values->elts) == NULL)
+	{
+		return NGX_ERROR;
+	}
+
+	ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+			"mysql subrequest handler '%V'", &uri);
+
+	q = ngx_strlchr(uri.data, uri.data + uri.len, '?');
+
+	if (q != NULL) {
+		args.data = q + 1;
+		args.len = uri.data + uri.len - q - 1;
+		uri.len = q - uri.data;
+	}
+
+	if (ngx_http_subrequest(r, 
+			&uri,
+			&args,
+			&sr,
+			NULL,
+			NGX_HTTP_SUBREQUEST_WAITED|NGX_HTTP_SUBREQUEST_IN_MEMORY) != NGX_OK)
+	{
+		return NGX_ERROR;
+	}
+
+	if (sr == NULL)
+		return NGX_ERROR;
+
+	/* set the same context to parent & subrequest;
+	   result will go there */
+
+	ctx = ngx_pcalloc(r->connection->pool, sizeof(ngx_http_mysql_ctx_t));
+
+	ngx_http_set_ctx(r, ctx, ngx_http_mysql_module);
+	ngx_http_set_ctx(sr, ctx, ngx_http_mysql_module);
+
+	return NGX_DONE;
+}
+
+static ngx_int_t ngx_http_mysql_get_subrequest_variable(ngx_http_request_t *r,
+		    ngx_http_variable_value_t *v, uintptr_t data)
+{
+	ngx_http_mysql_ctx_t *ctx;
+	unsigned n = (unsigned)data;
+	ngx_chain_t *chain;
+	ngx_buf_t *buf;
+
+	ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+			"mysql subrequest accessing variable #%d", n);
+
+	ctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
+
+	if (ctx != NULL) {
+
+		/* output chain is organized line by line;
+		   we need to choose n-th line/buffer from it.
+		   remember this method is not supposed to
+		   extract tons of fields from request! */
+
+		for(chain = ctx->subreq_out; 
+				n && chain != NULL && !chain->buf->last_buf; 
+				chain = chain->next, --n);
+
+		if (!n && chain != NULL && chain->buf != NULL) {
+
+			buf = chain->buf;
+
+			v->data = buf->pos;
+			v->len = buf->last - buf->pos;
+
+			if (buf->pos != buf->last && buf->last[-1] == '\n')
+				--v->len;
+
+			v->valid = 1;
+
+			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+				"mysql subrequest storing variable #%d value: '%*s'", 
+				n, v->len, v->data);
+		}
+
+	} else
+		v->not_found = 1;
+
+	return NGX_OK;
 }
 
 static void* ngx_http_mysql_create_srv_conf(ngx_conf_t *cf)
@@ -452,16 +610,25 @@ static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *c
 
 	ngx_log_debug(NGX_LOG_INFO, cf->log, 0, "mysql merge loc");
 
+
 	if (conf->query_lengths == NULL)
 		conf->query_lengths = prev->query_lengths;
 
 	if (conf->query_values == NULL)
 		conf->query_values = prev->query_values;
 
+
+	if (conf->subreq_lengths == NULL)
+		conf->subreq_lengths = prev->subreq_lengths;
+
+	if (conf->subreq_values == NULL)
+		conf->subreq_values = prev->subreq_values;
+
+
 	return NGX_CONF_OK;
 }
 
-static char * ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+static char* ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
 	ngx_http_mysql_loc_conf_t *mslcf = conf;
 	ngx_http_mtask_loc_conf_t *mlcf;
@@ -469,7 +636,6 @@ static char * ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *con
 	ngx_uint_t n;
 	ngx_http_script_compile_t sc;
 	ngx_str_t *value;
-
 	mlcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_mtask_module);
 	mlcf->handler = &ngx_http_mysql_handler;
 
@@ -492,5 +658,70 @@ static char * ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *con
 		return NGX_CONF_ERROR;
 
 	return NGX_CONF_OK;
+}
+
+static char* ngx_http_mysql_subrequest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+	ngx_http_mysql_loc_conf_t *mslcf = conf;
+	ngx_str_t *value;
+	ngx_uint_t n;
+	ngx_http_variable_t *v;
+	ngx_http_script_compile_t sc;
+	ngx_str_t *uri;
+
+	value = cf->args->elts;
+
+	/* compile script for uri */
+	uri = &value[1];
+
+	ngx_log_debug(NGX_LOG_INFO, cf->log, 0, "mysql subrequest uri: '%V'", uri);
+
+	n = ngx_http_script_variables_count(uri);
+
+	ngx_memzero(&sc, sizeof(ngx_http_script_compile_t));
+
+	sc.cf = cf;
+	sc.source = uri;
+	sc.lengths = &mslcf->subreq_lengths;
+	sc.values = &mslcf->subreq_values;
+	sc.variables = n;
+	sc.complete_lengths = 1;
+	sc.complete_values = 1;
+
+	if (ngx_http_script_compile(&sc) != NGX_OK)
+		return NGX_CONF_ERROR;
+
+	/* process output variables */
+	for(n = 2; n < cf->args->nelts; ++n) {
+
+		if (value[n].len > 0 && value[n].data[0] == '$') {
+			++value[n].data;
+			--value[n].len;
+		}
+
+		v = ngx_http_add_variable(cf, &value[n], NGX_HTTP_VAR_CHANGEABLE);
+
+		v->get_handler = &ngx_http_mysql_get_subrequest_variable;
+		v->data = n - 2;
+	}
+
+	return NGX_CONF_OK;
+}
+
+static ngx_int_t ngx_http_mysql_init(ngx_conf_t *cf) 
+{
+	ngx_http_core_main_conf_t *cmcf;
+	ngx_http_handler_pt *h;
+
+	cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
+
+	h = ngx_array_push(&cmcf->phases[NGX_HTTP_REWRITE_PHASE].handlers);
+
+	if (h == NULL)
+		return NGX_ERROR;
+
+	*h = ngx_http_mysql_subrequest_handler;
+
+	return NGX_OK;
 }
 
