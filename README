@@ -78,6 +78,39 @@ http {
 			mysql_query "DELETE FROM users WHERE id=$arg_id";
 		}
 
+		# store number of page shows per user
+		location ~ /register-by-cookie-show.* {
+
+			# register show in database
+			# need a location with this query:
+			# mysql_query "INSERT INTO shows(id) VALUES('$id') ON DUPLICATE KEY UPDATE SET count=count+1";
+			mysql_subrequest /update_shows_in_mysql?id=$cookie_abcdef;
+
+			# output content
+			rewrite ^(.*)$ /content last;
+		}
+
+		# spammers use big ids in picture refs to see who opened the message
+		location ~/spammer-style-image-show-register.* {
+
+			# need a location with this query:
+			# mysql_query "INSERT INTO shows(id) VALUES('$arg_id')";
+			mysql_subrequest /insert_show?id=$arg_id;
+
+			reqrite ^(.*)$ /content last;
+		}
+
+		location ~ /session.* {
+
+			# get user session
+			# need a location with this query:
+			# mysql_query "SELECT username, lastip FROM sessions WHERE id='$id'";
+			mysql_subrequest /select_from_mysql?id=$cookie_abcdef $username $lastip;
+
+			# go to content generator
+			rewrite ^(.*)$ /content?username=$username&lastip=$lastip last;
+		}
+
 		...
 	}
 
