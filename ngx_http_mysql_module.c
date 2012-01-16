@@ -312,10 +312,10 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 					"MySQL auto-inserted id=%uL", auto_id);
 
-			out = (ngx_chain_t*)ngx_palloc(r->pool, sizeof(ngx_chain_t));
+			out = (ngx_chain_t*)ngx_palloc(r->connection->pool, sizeof(ngx_chain_t));
 			out->next = NULL;
 
-			out->buf = ngx_create_temp_buf(r->pool, 32);
+			out->buf = ngx_create_temp_buf(r->connection->pool, 32);
 			out->buf->last = ngx_slprintf(out->buf->pos, out->buf->end, "%uL\n", auto_id);
 
 			out->buf->last_buf = 1;
@@ -348,9 +348,9 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 				len = value ? strlen(value) : 0;
 
-				node = (ngx_chain_t*)ngx_palloc(r->pool, sizeof(ngx_chain_t));
+				node = (ngx_chain_t*)ngx_palloc(r->connection->pool, sizeof(ngx_chain_t));
 				node->next = NULL;
-				node->buf = ngx_create_temp_buf(r->pool, len + 1);
+				node->buf = ngx_create_temp_buf(r->connection->pool, len + 1);
 
 				if (value)
 					memcpy(node->buf->pos, value, len);
@@ -378,9 +378,9 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 		/* no result */
 
-		out = (ngx_chain_t*)ngx_palloc(r->pool, sizeof(ngx_chain_t));
+		out = (ngx_chain_t*)ngx_palloc(r->connection->pool, sizeof(ngx_chain_t));
 		out->next = NULL;
-		out->buf = ngx_create_temp_buf(r->pool, 1);
+		out->buf = ngx_create_temp_buf(r->connection->pool, 1);
 		*out->buf->last++ = '\n';
 		out->buf->last_buf = 1;
 	}
