@@ -241,7 +241,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 		if (msscf->free_node == NULL) {
 
-			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
 					"not enough MySQL connections: %d", msscf->max_conn);
 
 			goto quit;
@@ -262,7 +262,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 	if (mnode == NULL || !mnode->ready) {
 
-		ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+		ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, 
 				"connecting to MySQL");
 
 		mysql_init(sock);
@@ -276,7 +276,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 						NULL, 0))) 
 		{
 
-			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
 					"couldn't connect to MySQL engine: %s",
 					mysql_error(sock));
 
@@ -291,7 +291,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 	if (mysql_query(sock, NGXCSTR(query))) {
 
-		ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+		ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
 				"MySQL query failed (%s)",
 				mysql_error(sock));
 
@@ -309,7 +309,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 		if (auto_id) {
 
-			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+			ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 					"MySQL auto-inserted id=%uL", auto_id);
 
 			out = (ngx_chain_t*)ngx_palloc(r->connection->pool, sizeof(ngx_chain_t));
@@ -326,7 +326,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 		if (!(res = mysql_store_result(sock))) {
 
-			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
 					"couldn't get MySQL result from %s",
 					mysql_error(sock));
 
@@ -343,7 +343,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 				value = row[n];
 
-				ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+				ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 					"MySQL value returned '%s'", value);
 
 				len = value ? strlen(value) : 0;
@@ -414,7 +414,7 @@ quit:
 
 		if (ctx == NULL) {
 
-			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+			ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 				"no context in subrequest");
 
 			return NGX_ERROR;
@@ -437,7 +437,7 @@ static ngx_int_t ngx_http_mysql_subrequest_handler(ngx_http_request_t *r)
 	
 	mslcf = ngx_http_get_module_loc_conf(r, ngx_http_mysql_module);
 
-	ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 			"mysql subrequest handler");
 
 	if (mslcf->subreq_values == NULL
@@ -457,7 +457,7 @@ static ngx_int_t ngx_http_mysql_subrequest_handler(ngx_http_request_t *r)
 		return NGX_ERROR;
 	}
 
-	ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 			"mysql subrequest handler '%V'", &uri);
 
 	q = ngx_strlchr(uri.data, uri.data + uri.len, '?');
@@ -500,7 +500,7 @@ static ngx_int_t ngx_http_mysql_get_subrequest_variable(ngx_http_request_t *r,
 	ngx_chain_t *chain;
 	ngx_buf_t *buf;
 
-	ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 			"mysql subrequest accessing variable #%d", n);
 
 	ctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
@@ -528,7 +528,7 @@ static ngx_int_t ngx_http_mysql_get_subrequest_variable(ngx_http_request_t *r,
 
 			v->valid = 1;
 
-			ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+			ngx_log_debug3(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
 				"mysql subrequest storing variable #%d value: '%*s'", 
 				n, v->len, v->data);
 		}
@@ -556,7 +556,7 @@ static char* ngx_http_mysql_merge_srv_conf(ngx_conf_t *cf, void *parent, void *c
 	ngx_http_mysql_srv_conf_t *conf = child;
 	ngx_int_t n;
 
-	ngx_log_debug(NGX_LOG_INFO, cf->log, 0, "mysql merge srv");
+	ngx_log_debug0(NGX_LOG_INFO, cf->log, 0, "mysql merge srv");
 
 	ngx_conf_merge_str_value(conf->host,
 			prev->host, NULL);
@@ -608,7 +608,7 @@ static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *c
 	ngx_http_mysql_loc_conf_t *prev = parent;
 	ngx_http_mysql_loc_conf_t *conf = child;
 
-	ngx_log_debug(NGX_LOG_INFO, cf->log, 0, "mysql merge loc");
+	ngx_log_debug0(NGX_LOG_INFO, cf->log, 0, "mysql merge loc");
 
 
 	if (conf->query_lengths == NULL)
@@ -674,7 +674,7 @@ static char* ngx_http_mysql_subrequest(ngx_conf_t *cf, ngx_command_t *cmd, void 
 	/* compile script for uri */
 	uri = &value[1];
 
-	ngx_log_debug(NGX_LOG_INFO, cf->log, 0, "mysql subrequest uri: '%V'", uri);
+	ngx_log_debug1(NGX_LOG_INFO, cf->log, 0, "mysql subrequest uri: '%V'", uri);
 
 	n = ngx_http_script_variables_count(uri);
 
