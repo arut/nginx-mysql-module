@@ -344,7 +344,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 				value = row[n];
 
 				ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
-					"MySQL value returned '%s'", value);
+					"MySQL value returned '%s'", value ? value : "NULL");
 
 				len = value ? strlen(value) : 0;
 
