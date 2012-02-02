@@ -385,6 +385,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 		out->buf->last_buf = 1;
 	}
 
+	r->headers_out.status = NGX_HTTP_OK;
 
 	if (!r->subrequest_in_memory) {
 		
