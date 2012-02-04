@@ -158,21 +158,21 @@ static ngx_command_t ngx_http_mysql_commands[] = {
 	 */
 
 	{	ngx_string("mysql_query"),
-		NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE1,
 		ngx_http_mysql_query,
 		NGX_HTTP_LOC_CONF_OFFSET,
 		0,
 		NULL },
 
 	{	ngx_string("mysql_subrequest"),
-		NGX_HTTP_LOC_CONF|NGX_CONF_1MORE,
+		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_1MORE,
 		ngx_http_mysql_subrequest,
 		NGX_HTTP_LOC_CONF_OFFSET,
 		0,
 		NULL },
 
 	{	ngx_string("mysql_escape"),
-		NGX_HTTP_LOC_CONF|NGX_CONF_TAKE2,
+		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE2,
 		ngx_http_mysql_escape,
 		NGX_HTTP_LOC_CONF_OFFSET,
 		0,
