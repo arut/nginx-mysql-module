@@ -50,6 +50,8 @@ http {
 		mysql_database test;
 		mysql_connections 32;
 
+		mysql_charset utf8;
+
 		mtask_stack 65536;
 
 
@@ -60,12 +62,18 @@ http {
 
 		location ~ /select.* {
 
-			mysql_query "SELECT name FROM users WHERE id='$arg_id'";
+			if ( $arg_id ~* ^\d+$ ) {
+
+				mysql_query "SELECT name FROM users WHERE id='$arg_id'";
+
+			}
 		}
 
 		location ~ /insert.* {
 
-			mysql_query "INSERT INTO users(name) VALUES('$arg_name')";
+			mysql_escape $escaped_name $arg_name;
+
+			mysql_query "INSERT INTO users(name) VALUES('$escaped_name')";
 		}
 
 		location ~ /update.* {
