@@ -594,6 +594,8 @@ static ngx_int_t ngx_http_mysql_get_escaped_variable(ngx_http_request_t *r,
 		v->len = mysql_real_escape_string(ctx->current, (char*)v->data, 
 				(const char*)vv->data, vv->len);
 
+		v->valid = 1;
+
 	} else {
 
 		v->not_found = 1;
