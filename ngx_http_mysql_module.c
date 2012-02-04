@@ -47,6 +47,7 @@ static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *c
 
 static char* ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char* ngx_http_mysql_subrequest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char* ngx_http_mysql_escape(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
 static ngx_int_t ngx_http_mysql_init(ngx_conf_t *cf);
 
@@ -79,6 +80,7 @@ struct ngx_http_mysql_srv_conf_s {
 	ngx_str_t user;
 	ngx_str_t password;
 	ngx_str_t database;
+	ngx_str_t charset;
 
 	ngx_int_t max_conn;
 
@@ -89,6 +91,8 @@ struct ngx_http_mysql_srv_conf_s {
 typedef struct ngx_http_mysql_srv_conf_s ngx_http_mysql_srv_conf_t;
 
 struct ngx_http_mysql_ctx_s {
+
+	MYSQL *current;
 
 	ngx_chain_t *subreq_out;
 
@@ -133,6 +137,13 @@ static ngx_command_t ngx_http_mysql_commands[] = {
 		offsetof(ngx_http_mysql_srv_conf_t, database),
 		NULL },
 
+	{	ngx_string("mysql_charset"),
+		NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+		ngx_conf_set_str_slot,
+		NGX_HTTP_SRV_CONF_OFFSET,
+		offsetof(ngx_http_mysql_srv_conf_t, charset),
+		NULL },
+
 	{	ngx_string("mysql_connections"),
 		NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
 		ngx_conf_set_num_slot,
@@ -156,6 +167,13 @@ static ngx_command_t ngx_http_mysql_commands[] = {
 	{	ngx_string("mysql_subrequest"),
 		NGX_HTTP_LOC_CONF|NGX_CONF_1MORE,
 		ngx_http_mysql_subrequest,
+		NGX_HTTP_LOC_CONF_OFFSET,
+		0,
+		NULL },
+
+	{	ngx_string("mysql_escape"),
+		NGX_HTTP_LOC_CONF|NGX_CONF_TAKE2,
+		ngx_http_mysql_escape,
 		NGX_HTTP_LOC_CONF_OFFSET,
 		0,
 		NULL },
@@ -223,16 +241,19 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 	
 	mslcf = ngx_http_get_module_loc_conf(r, ngx_http_mysql_module);
 
+	ctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
+
+	if (ctx == NULL) {
+	
+		ctx = ngx_pcalloc(r->connection->pool, sizeof(ngx_http_mysql_ctx_t));
+
+		ngx_http_set_ctx(r, ctx, ngx_http_mysql_module);
+	}
+
 	sock = NULL;
 	mnode = NULL;
 	out = NULL;
 	ret = NGX_ERROR;
-
-	if (ngx_http_script_run(r, &query, mslcf->query_lengths->elts, 0,
-				mslcf->query_values->elts) == NULL)
-	{
-		goto quit;
-	}
 
 	if (msscf->max_conn != NGX_CONF_UNSET 
 			&& msscf->max_conn) 
@@ -283,11 +304,35 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 			goto quit;
 		}
 
+		if (msscf->charset.len 
+				&& mysql_set_character_set(sock, NGXCSTR(msscf->charset)))
+		{
+			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+					"error setting MySQL charset: %s",
+					mysql_error(sock));
+
+			goto quit;
+		}
+
 		sock->reconnect = 1;
 
 		if (mnode)
 			mnode->ready = 1;
 	}
+
+	/* set current MySQL connection for escapes */
+
+	ctx->current = sock;
+
+	if (ngx_http_script_run(r, &query, mslcf->query_lengths->elts, 0,
+				mslcf->query_values->elts) == NULL)
+	{
+		ctx->current = NULL;
+
+		goto quit;
+	}
+
+	ctx->current = NULL;
 
 	if (mysql_query(sock, NGXCSTR(query))) {
 
@@ -408,19 +453,6 @@ quit:
 
 	if (r->subrequest_in_memory) {
 
-		/* store result to be used by parent request;
-		   remember we have chain buffers organized by lines */
-
-		ctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
-
-		if (ctx == NULL) {
-
-			ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
-				"no context in subrequest");
-
-			return NGX_ERROR;
-		}
-
 		ctx->subreq_out = out;
 	}
 
@@ -536,6 +568,39 @@ static ngx_int_t ngx_http_mysql_get_subrequest_variable(ngx_http_request_t *r,
 
 	} else
 		v->not_found = 1;
+
+	return NGX_OK;
+}
+
+static ngx_int_t ngx_http_mysql_get_escaped_variable(ngx_http_request_t *r,
+		    ngx_http_variable_value_t *v, uintptr_t data)
+{
+	ngx_http_mysql_ctx_t *ctx;
+	ngx_int_t index = (ngx_int_t)data;
+	ngx_http_variable_value_t *vv;
+
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+			"mysql escaping variable #%d", index);
+
+	ctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
+
+	if (ctx != NULL && ctx->current != NULL) {
+
+		vv = ngx_http_get_indexed_variable(r, index);
+
+		/* this size is advised in MySQL docs */
+		v->data = ngx_palloc(r->pool, vv->len * 2 + 1);
+
+		v->len = mysql_real_escape_string(ctx->current, (char*)v->data, 
+				(const char*)vv->data, vv->len);
+
+	} else {
+
+		v->not_found = 1;
+
+		ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+					"mysql escaped variable accessed outside of query");
+	}
 
 	return NGX_OK;
 }
@@ -705,6 +770,42 @@ static char* ngx_http_mysql_subrequest(ngx_conf_t *cf, ngx_command_t *cmd, void 
 		v->get_handler = &ngx_http_mysql_get_subrequest_variable;
 		v->data = n - 2;
 	}
+
+	return NGX_CONF_OK;
+}
+
+static char* ngx_http_mysql_escape(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+	ngx_str_t *value;
+	ngx_http_variable_t *v;
+	ngx_int_t index;
+
+	value = cf->args->elts;
+
+	if (value[1].data[0] != '$')
+		return "needs variable as the first argument";
+
+	value[1].data++;
+	value[1].len--;
+
+	if (value[2].data[0] != '$')
+		return "needs variable as the second argument";
+
+	value[2].data++;
+	value[2].len--;
+
+	index = ngx_http_get_variable_index(cf, &value[2]);
+
+	if (index == NGX_ERROR)
+		return "failed to access second variable";
+
+	v = ngx_http_add_variable(cf, &value[1], NGX_HTTP_VAR_CHANGEABLE);
+
+	if (v == NULL)
+		return "failed to add variable";
+
+	v->get_handler = ngx_http_mysql_get_escaped_variable;
+	v->data = (uintptr_t)index;
 
 	return NGX_CONF_OK;
 }
