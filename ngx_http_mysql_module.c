@@ -83,6 +83,7 @@ struct ngx_http_mysql_srv_conf_s {
 	ngx_str_t charset;
 
 	ngx_int_t max_conn;
+	ngx_flag_t multi;
 
 	ngx_http_mysql_node_t *nodes;
 	ngx_http_mysql_node_t *free_node;
@@ -149,6 +150,13 @@ static ngx_command_t ngx_http_mysql_commands[] = {
 		ngx_conf_set_num_slot,
 		NGX_HTTP_SRV_CONF_OFFSET,
 		offsetof(ngx_http_mysql_srv_conf_t, max_conn),
+		NULL },
+
+	{	ngx_string("mysql_multi"),
+		NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+		ngx_conf_set_flag_slot,
+		NGX_HTTP_SRV_CONF_OFFSET,
+		offsetof(ngx_http_mysql_srv_conf_t, multi),
 		NULL },
 
 	/* Queries support shell-style substitutions 
@@ -230,7 +238,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 	MYSQL_ROW row;
 	char *value;
 	size_t len;
-	int n, num_fields;
+	int n, num_fields, status;
 	ngx_chain_t *out, *node, *prev;
 	uint64_t auto_id;
 	ngx_http_mysql_node_t *mnode;
@@ -294,7 +302,8 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 						NGXCSTR(msscf->password),
 						NGXCSTR(msscf->database), 
 						msscf->port == NGX_CONF_UNSET ? 0 : msscf->port, 
-						NULL, 0))) 
+						NULL,
+						msscf->multi == 1 ? CLIENT_MULTI_STATEMENTS : 0))) 
 		{
 
 			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
@@ -345,63 +354,27 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 	out = NULL;
 
-	if (!mysql_field_count(sock)) {
+	prev = NULL;
 
-		/* no data returned 
-		 check if there's auto-id pending */
+	do {
 
-		auto_id = mysql_insert_id(sock);
+		if (!mysql_field_count(sock)) {
 
-		if (auto_id) {
+			/* no data returned 
+			   check if there's auto-id pending */
 
-			ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
-					"MySQL auto-inserted id=%uL", auto_id);
+			auto_id = mysql_insert_id(sock);
 
-			out = (ngx_chain_t*)ngx_palloc(r->connection->pool, sizeof(ngx_chain_t));
-			out->next = NULL;
-
-			out->buf = ngx_create_temp_buf(r->connection->pool, 32);
-			out->buf->last = ngx_slprintf(out->buf->pos, out->buf->end, "%uL\n", auto_id);
-
-			out->buf->last_buf = 1;
-
-		}
-
-	} else {
-
-		if (!(res = mysql_store_result(sock))) {
-
-			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
-					"couldn't get MySQL result from %s",
-					mysql_error(sock));
-
-			goto quit;
-		}
-
-		num_fields = mysql_num_fields(res);
-
-		prev = NULL;
-
-		while((row = mysql_fetch_row(res))) {
-
-			for(n = 0; n < num_fields; ++n) {
-
-				value = row[n];
+			if (auto_id) {
 
 				ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
-					"MySQL value returned '%s'", value ? value : "NULL");
-
-				len = value ? strlen(value) : 0;
+						"MySQL auto-inserted id=%uL", auto_id);
 
 				node = (ngx_chain_t*)ngx_palloc(r->connection->pool, sizeof(ngx_chain_t));
 				node->next = NULL;
-				node->buf = ngx_create_temp_buf(r->connection->pool, len + 1);
 
-				if (value)
-					memcpy(node->buf->pos, value, len);
-
-				node->buf->pos[len] = '\n';
-				node->buf->last += ++len;
+				node->buf = ngx_create_temp_buf(r->connection->pool, 32);
+				node->buf->last = ngx_slprintf(node->buf->pos, node->buf->end, "%uL\n", auto_id);
 
 				if (prev)
 					prev->next = node;
@@ -410,14 +383,77 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 					out = node;
 
 				prev = node;
+
 			}
+
+		} else {
+
+			if (!(res = mysql_store_result(sock))) {
+
+				ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+						"couldn't get MySQL result: %s",
+						mysql_error(sock));
+
+				goto quit;
+			}
+
+			num_fields = mysql_num_fields(res);
+
+			while((row = mysql_fetch_row(res))) {
+
+				for(n = 0; n < num_fields; ++n) {
+
+					value = row[n];
+
+					ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, 
+							"MySQL value returned '%s'", value ? value : "NULL");
+
+					len = value ? strlen(value) : 0;
+
+					node = (ngx_chain_t*)ngx_palloc(r->connection->pool, sizeof(ngx_chain_t));
+					node->next = NULL;
+					node->buf = ngx_create_temp_buf(r->connection->pool, len + 1);
+
+					if (value)
+						memcpy(node->buf->pos, value, len);
+
+					node->buf->pos[len] = '\n';
+					node->buf->last += ++len;
+
+					if (prev)
+						prev->next = node;
+
+					else
+						out = node;
+
+					prev = node;
+				}
+			}
+
+			mysql_free_result(res);
 		}
 
-		if (prev)
-			prev->buf->last_buf = 1;
+		status = -1;
 
-		mysql_free_result(res);
-	}
+		if (msscf->multi == 1) {
+
+				status = mysql_next_result(sock);
+
+				if (status > 0) {
+
+					ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+						"couldn't get next MySQL result: %s",
+						mysql_error(sock));
+
+					goto quit;
+				}
+
+		}
+
+	} while(!status);
+
+	if (prev)
+		prev->buf->last_buf = 1;
 
 	if (out == NULL) {
 
@@ -614,6 +650,8 @@ static void* ngx_http_mysql_create_srv_conf(ngx_conf_t *cf)
 	conf->port = NGX_CONF_UNSET;
 
 	conf->max_conn = NGX_CONF_UNSET;
+
+	conf->multi = NGX_CONF_UNSET;
 
 	return conf;
 }
