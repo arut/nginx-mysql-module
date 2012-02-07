@@ -437,16 +437,16 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 		if (msscf->multi == 1) {
 
-				status = mysql_next_result(sock);
+			status = mysql_next_result(sock);
 
-				if (status > 0) {
+			if (status > 0) {
 
-					ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+				ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
 						"couldn't get next MySQL result: %s",
 						mysql_error(sock));
 
-					goto quit;
-				}
+				goto quit;
+			}
 
 		}
 
