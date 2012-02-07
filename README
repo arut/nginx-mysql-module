@@ -52,12 +52,20 @@ http {
 
 		mysql_charset utf8;
 
+		# this turns on multiple statements support
+		mysql_multi on;
+
 		mtask_stack 65536;
 
 
 		location ~ /all {
 
 			mysql_query "SELECT name FROM users WHERE id='$arg_id'";
+		}
+
+		location /multi {
+
+			mysql_query "SELECT id, name FROM users ORDER BY id DESC LIMIT 10; SELECT id, name FROM users ORDER BY id ASC LIMIT 10";
 		}
 
 		location ~ /select.* {
