@@ -53,6 +53,7 @@ http {
 		mysql_charset utf8;
 
 		# this turns on multiple statements support
+		# and is REQUIRED when calling stored procedures
 		mysql_multi on;
 
 		mtask_stack 65536;
