@@ -1,37 +1,9 @@
-/******************************************************************************
-Copyright (c) 2012, Roman Arutyunyan (arut@qip.ru)
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification, 
-are permitted provided that the following conditions are met:
-
-   1. Redistributions of source code must retain the above copyright notice, 
-      this list of conditions and the following disclaimer.
-
-   2. Redistributions in binary form must reproduce the above copyright notice, 
-      this list of conditions and the following disclaimer in the documentation
-	  and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE AUTHOR ''AS IS'' AND ANY EXPRESS OR IMPLIED
-WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF 
-MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT 
-SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, 
-PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR 
-BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING 
-IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY 
-OF SUCH DAMAGE.
-*******************************************************************************/
-
-/*
-   NGINX MySQL module
-
-   * Makes use of libmysqlclient.so
-   * Completely asynchronous
-   * Uses nginx-mtask-module 
-
-*/
+/*************************************************************************
+        > File Name: ngx_http_mysql_module.c
+      > Author: DenoFiend
+      > Mail: denofiend@gmail.com
+      > Created Time: 2012年12月21日 星期五 15时46分57秒
+ ************************************************************************/
 
 #include <ngx_config.h>
 #include <ngx_core.h>
@@ -46,6 +18,7 @@ static void* ngx_http_mysql_create_loc_conf(ngx_conf_t *cf);
 static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 
 static char* ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char* ngx_http_mysql_transaction(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char* ngx_http_mysql_subrequest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char* ngx_http_mysql_escape(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
@@ -58,6 +31,8 @@ struct ngx_http_mysql_loc_conf_s {
 
 	ngx_array_t *subreq_lengths;
 	ngx_array_t *subreq_values;
+
+	ngx_array_t *transaction_sqls;
 };
 
 typedef struct ngx_http_mysql_loc_conf_s ngx_http_mysql_loc_conf_t;
@@ -84,6 +59,7 @@ struct ngx_http_mysql_srv_conf_s {
 
 	ngx_int_t max_conn;
 	ngx_flag_t multi;
+	ngx_flag_t mysql_auto_commit;
 
 	ngx_http_mysql_node_t *nodes;
 	ngx_http_mysql_node_t *free_node;
@@ -159,6 +135,13 @@ static ngx_command_t ngx_http_mysql_commands[] = {
 		offsetof(ngx_http_mysql_srv_conf_t, multi),
 		NULL },
 
+	{	ngx_string("mysql_auto_commit"),
+		NGX_HTTP_SRV_CONF|NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+		ngx_conf_set_flag_slot,
+		NGX_HTTP_SRV_CONF_OFFSET,
+		offsetof(ngx_http_mysql_srv_conf_t, mysql_auto_commit),
+		NULL },
+
 	/* Queries support shell-style substitutions 
 	   In the following example $id variable is substituted:
 
@@ -182,6 +165,13 @@ static ngx_command_t ngx_http_mysql_commands[] = {
 	{	ngx_string("mysql_escape"),
 		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE2,
 		ngx_http_mysql_escape,
+		NGX_HTTP_LOC_CONF_OFFSET,
+		0,
+		NULL },
+	
+	{	ngx_string("mysql_transaction"),
+		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE1234,
+		ngx_http_mysql_transaction,
 		NGX_HTTP_LOC_CONF_OFFSET,
 		0,
 		NULL },
@@ -220,6 +210,205 @@ ngx_module_t ngx_http_mysql_module = {
 };
 
 #define NGXCSTR(s) ((s).data ? strndupa((char*)(s).data, (s).len) : NULL)
+
+ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
+
+	ngx_http_mysql_loc_conf_t *mslcf;
+	ngx_http_mysql_srv_conf_t *msscf;
+	ngx_str_t *query;
+	ngx_str_t trans_lev = ngx_string("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED");
+	MYSQL mysql, *sock;
+	ngx_chain_t *out;
+	ngx_http_mysql_node_t *mnode;
+	ngx_int_t ret;
+	ngx_http_mysql_ctx_t *ctx;
+	ngx_uint_t i;
+
+	msscf = ngx_http_get_module_srv_conf(r, ngx_http_mysql_module);
+
+	mslcf = ngx_http_get_module_loc_conf(r, ngx_http_mysql_module);
+
+	ctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
+
+	if (ctx == NULL) {
+
+		ctx = ngx_pcalloc(r->connection->pool, sizeof(ngx_http_mysql_ctx_t));
+
+		ngx_http_set_ctx(r, ctx, ngx_http_mysql_module);
+	}
+
+	sock = NULL;
+	mnode = NULL;
+	out = NULL;
+	ret = NGX_ERROR;
+
+	if (msscf->max_conn != NGX_CONF_UNSET 
+			&& msscf->max_conn) 
+	{
+		/* take connection from pool */
+
+		if (msscf->free_node == NULL) {
+
+			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+					"not enough MySQL connections: %d", msscf->max_conn);
+
+			goto quit;
+		}
+
+		mnode = msscf->free_node;
+
+		msscf->free_node = msscf->free_node->next;
+
+		sock = &mnode->mysql;
+
+	} else {
+
+		/* connection-per-request */
+
+		sock = &mysql;
+	}
+
+	if (mnode == NULL || !mnode->ready) {
+
+		ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, 
+				"connecting to MySQL");
+
+		mysql_init(sock);
+
+		if (!(sock = mysql_real_connect(sock,
+						NGXCSTR(msscf->host), 
+						NGXCSTR(msscf->user), 
+						NGXCSTR(msscf->password),
+						NGXCSTR(msscf->database), 
+						msscf->port == NGX_CONF_UNSET ? 0 : msscf->port, 
+						NULL,
+						msscf->multi == 1 ? CLIENT_MULTI_STATEMENTS : 0))) 
+		{
+
+			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+					"couldn't connect to MySQL engine: %s",
+					mysql_error(sock));
+
+			goto quit;
+		}
+
+		if (msscf->charset.len 
+				&& mysql_set_character_set(sock, NGXCSTR(msscf->charset)))
+		{
+			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+					"error setting MySQL charset: %s",
+					mysql_error(sock));
+
+			goto quit;
+		}
+
+		sock->reconnect = 1;
+
+		if (mnode)
+			mnode->ready = 1;
+
+
+		ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "mysql_auto_commit(%d)", msscf->mysql_auto_commit);
+		/*set auto_commit*/
+		if (0 != mysql_autocommit(sock, msscf->mysql_auto_commit))
+		{
+			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+					"error setting MySQL auto_commit: %s",
+					mysql_error(sock));
+
+			goto quit;
+		}
+
+		/* set TRANSACTION_REPEATABLE_READ to trans level*/
+		if (0 != mysql_real_query(sock, NGXCSTR(trans_lev), trans_lev.len))
+		{
+			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+					"error setting MySQL transaction level: %s",
+					mysql_error(sock));
+
+			goto quit;
+		}
+	}
+
+
+	/* set current MySQL connection for escapes */
+
+	ctx->current = sock;
+
+	/*
+	if (ngx_http_script_run(r, query, mslcf->query_lengths->elts, 0,
+				mslcf->query_values->elts) == NULL)
+	{
+		ctx->current = NULL;
+
+		goto quit;
+	}
+
+	*/
+	ctx->current = NULL;
+
+
+	query = mslcf->transaction_sqls->elts;
+
+	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "query len(%d)", mslcf->transaction_sqls->nelts);
+
+	for (i = 0; i < mslcf->transaction_sqls->nelts; ++i) 
+	{
+		ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "transaction_sql query[%d]:%V", i, &(query[i])); 
+
+		if (mysql_real_query(sock, NGXCSTR(query[i]), query[i].len)) {
+
+			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+					"MySQL read_query failed (%s)",
+					mysql_error(sock));
+
+			goto quit;
+		}
+	}
+
+
+	if (out == NULL) {
+
+		/* no result */
+
+		out = (ngx_chain_t*)ngx_palloc(r->connection->pool, sizeof(ngx_chain_t));
+		out->next = NULL;
+		out->buf = ngx_create_temp_buf(r->connection->pool, 1);
+		*out->buf->last++ = 'y';
+		*out->buf->last++ = 'e';
+		*out->buf->last++ = 's';
+		out->buf->last_buf = 1;
+	}
+	r->headers_out.status = NGX_HTTP_OK;
+
+	if (!r->subrequest_in_memory) {
+
+		ngx_http_send_header(r);
+
+		ngx_http_output_filter(r, out);
+	}
+
+	ret = NGX_OK;
+
+
+quit:
+
+	if (mnode != NULL) {
+
+		mnode->next = msscf->free_node;
+		msscf->free_node = mnode;
+	}
+	else if (sock != NULL) {
+
+		mysql_close(sock);
+	}
+	if (r->subrequest_in_memory) {
+
+		ctx->subreq_out = out;
+	}
+
+	return ret;
+}
 
 ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
@@ -653,6 +842,8 @@ static void* ngx_http_mysql_create_srv_conf(ngx_conf_t *cf)
 
 	conf->multi = NGX_CONF_UNSET;
 
+	conf->mysql_auto_commit = NGX_CONF_UNSET;
+
 	return conf;
 }
 
@@ -723,6 +914,9 @@ static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *c
 	if (conf->query_values == NULL)
 		conf->query_values = prev->query_values;
 
+	if (conf->transaction_sqls == NULL)
+		conf->transaction_sqls = prev->transaction_sqls;
+
 
 	if (conf->subreq_lengths == NULL)
 		conf->subreq_lengths = prev->subreq_lengths;
@@ -762,6 +956,69 @@ static char* ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf
 
 	if (ngx_http_script_compile(&sc) != NGX_OK)
 		return NGX_CONF_ERROR;
+
+	return NGX_CONF_OK;
+}
+
+static char* ngx_http_mysql_transaction(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+	ngx_http_mysql_loc_conf_t *mslcf = conf;
+	ngx_http_mtask_loc_conf_t *mlcf;
+	ngx_str_t *query;
+	ngx_uint_t n;
+	ngx_http_script_compile_t sc;
+	ngx_str_t *value, *vv;
+	ngx_uint_t i;
+	mlcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_mtask_module);
+	mlcf->handler = &ngx_http_mysql_transaction_handler;
+
+
+	value = cf->args->elts;
+	
+	mslcf->transaction_sqls = ngx_array_create(cf->pool, cf->args->nelts, sizeof(ngx_str_t));
+
+	if (NULL == mslcf->transaction_sqls)
+	{
+		ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+				"invalid \" mysql_transaction valuee\" parameter \"%V\"",
+				&value[1]);
+		return NGX_CONF_ERROR;
+	}
+
+
+	for (i = 1; i < cf->args->nelts; i++) {
+		vv = ngx_array_push(mslcf->transaction_sqls);
+
+		if (vv == NULL)
+		{
+			ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+					"invalid \" mysql_transaction valuee\" parameter \"%V\"",
+					&value[i]);
+			return NGX_CONF_ERROR;
+		}
+	
+		*vv = value[i];
+
+		query = &value[i];
+
+		ngx_log_debug1(NGX_LOG_INFO, cf->log, 0, "mysql transaction: query'%s'", query);
+
+		n = ngx_http_script_variables_count(query);
+
+		ngx_memzero(&sc, sizeof(ngx_http_script_compile_t));
+
+		sc.cf = cf;
+		sc.source = query;
+		sc.lengths = &mslcf->query_lengths;
+		sc.values = &mslcf->query_values;
+		sc.variables = n;
+		sc.complete_lengths = 1;
+		sc.complete_values = 1;
+
+
+		if (ngx_http_script_compile(&sc) != NGX_OK)
+			return NGX_CONF_ERROR;
+	}
 
 	return NGX_CONF_OK;
 }
@@ -866,4 +1123,3 @@ static ngx_int_t ngx_http_mysql_init(ngx_conf_t *cf)
 
 	return NGX_OK;
 }
-
