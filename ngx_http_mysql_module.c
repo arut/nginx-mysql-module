@@ -24,6 +24,14 @@ static char* ngx_http_mysql_escape(ngx_conf_t *cf, ngx_command_t *cmd, void *con
 
 static ngx_int_t ngx_http_mysql_init(ngx_conf_t *cf);
 
+
+typedef struct ngx_http_mysql_trans_loc_conf_s{
+	ngx_array_t *query_lengths;
+	ngx_array_t *query_values;
+	ngx_str_t sql;
+	ngx_uint_t len;
+}ngx_http_mysql_trans_loc_conf_t;
+
 struct ngx_http_mysql_loc_conf_s {
 
 	ngx_array_t *query_lengths;
@@ -32,7 +40,8 @@ struct ngx_http_mysql_loc_conf_s {
 	ngx_array_t *subreq_lengths;
 	ngx_array_t *subreq_values;
 
-	ngx_array_t *transaction_sqls;
+	/* for transaction*/
+	ngx_http_mysql_trans_loc_conf_t *transaction_sqls;
 };
 
 typedef struct ngx_http_mysql_loc_conf_s ngx_http_mysql_loc_conf_t;
@@ -215,7 +224,7 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 
 	ngx_http_mysql_loc_conf_t *mslcf;
 	ngx_http_mysql_srv_conf_t *msscf;
-	ngx_str_t *query;
+	ngx_str_t query;
 	ngx_str_t trans_lev = ngx_string("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED");
 	MYSQL mysql, *sock;
 	ngx_chain_t *out;
@@ -223,6 +232,7 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 	ngx_int_t ret;
 	ngx_http_mysql_ctx_t *ctx;
 	ngx_uint_t i;
+	ngx_http_mysql_trans_loc_conf_t * transaction_sqls;
 
 	msscf = ngx_http_get_module_srv_conf(r, ngx_http_mysql_module);
 
@@ -292,6 +302,7 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 			goto quit;
 		}
 
+		/*set charset*/
 		if (msscf->charset.len 
 				&& mysql_set_character_set(sock, NGXCSTR(msscf->charset)))
 		{
@@ -307,8 +318,8 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 		if (mnode)
 			mnode->ready = 1;
 
-
 		ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "mysql_auto_commit(%d)", msscf->mysql_auto_commit);
+
 		/*set auto_commit*/
 		if (0 != mysql_autocommit(sock, msscf->mysql_auto_commit))
 		{
@@ -335,28 +346,37 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 
 	ctx->current = sock;
 
-	/*
-	if (ngx_http_script_run(r, query, mslcf->query_lengths->elts, 0,
-				mslcf->query_values->elts) == NULL)
+
+	transaction_sqls = mslcf->transaction_sqls;
+
+	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "query len(%d)", transaction_sqls->len);
+
+	for (i = 0; i < transaction_sqls->len-1; ++i) 
 	{
+
+		ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "transaction_sql sql[%d]:%V", i, &transaction_sqls[i].sql); 
+
+		/* not found script $arg_id in sql */
+		if (NULL == transaction_sqls[i].query_lengths && NULL == transaction_sqls[i].query_values)
+		{
+			query = transaction_sqls[i].sql;
+		}
+		else
+		{
+			if (ngx_http_script_run(r, &query, transaction_sqls[i].query_lengths->elts, 0, transaction_sqls[i].query_values->elts) == NULL)
+			{
+				ctx->current = NULL;
+
+				goto quit;
+			}
+
+		}
+
 		ctx->current = NULL;
 
-		goto quit;
-	}
+		ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "transaction_sql query[%d]:%V", i, &query); 
 
-	*/
-	ctx->current = NULL;
-
-
-	query = mslcf->transaction_sqls->elts;
-
-	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "query len(%d)", mslcf->transaction_sqls->nelts);
-
-	for (i = 0; i < mslcf->transaction_sqls->nelts; ++i) 
-	{
-		ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "transaction_sql query[%d]:%V", i, &(query[i])); 
-
-		if (mysql_real_query(sock, NGXCSTR(query[i]), query[i].len)) {
+		if (mysql_real_query(sock, NGXCSTR(query), query.len)) {
 
 			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
 					"MySQL read_query failed (%s)",
@@ -924,6 +944,8 @@ static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *c
 	if (conf->subreq_values == NULL)
 		conf->subreq_values = prev->subreq_values;
 
+	if (conf->transaction_sqls == NULL)
+		conf->transaction_sqls = prev->transaction_sqls;
 
 	return NGX_CONF_OK;
 }
@@ -964,60 +986,63 @@ static char* ngx_http_mysql_transaction(ngx_conf_t *cf, ngx_command_t *cmd, void
 {
 	ngx_http_mysql_loc_conf_t *mslcf = conf;
 	ngx_http_mtask_loc_conf_t *mlcf;
-	ngx_str_t *query;
 	ngx_uint_t n;
 	ngx_http_script_compile_t sc;
-	ngx_str_t *value, *vv;
+	ngx_str_t *value;
 	ngx_uint_t i;
+	ngx_http_mysql_trans_loc_conf_t *mtlcf;
+
+
 	mlcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_mtask_module);
 	mlcf->handler = &ngx_http_mysql_transaction_handler;
 
 
-	value = cf->args->elts;
-	
-	mslcf->transaction_sqls = ngx_array_create(cf->pool, cf->args->nelts, sizeof(ngx_str_t));
-
-	if (NULL == mslcf->transaction_sqls)
-	{
-		ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-				"invalid \" mysql_transaction valuee\" parameter \"%V\"",
-				&value[1]);
-		return NGX_CONF_ERROR;
+	if (mslcf->transaction_sqls) {
+		return "is duplicate";
 	}
 
+	mtlcf = ngx_pcalloc(cf->pool, cf->args->nelts * sizeof(ngx_http_mysql_trans_loc_conf_t));
 
-	for (i = 1; i < cf->args->nelts; i++) {
-		vv = ngx_array_push(mslcf->transaction_sqls);
-
-		if (vv == NULL)
-		{
-			ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-					"invalid \" mysql_transaction valuee\" parameter \"%V\"",
-					&value[i]);
-			return NGX_CONF_ERROR;
-		}
+	if (mtlcf == NULL) {
+		return NGX_CONF_ERROR;
+	}
 	
-		*vv = value[i];
 
-		query = &value[i];
+	mslcf->transaction_sqls = mtlcf;
+	mtlcf->len = cf->args->nelts;
 
-		ngx_log_debug1(NGX_LOG_INFO, cf->log, 0, "mysql transaction: query'%s'", query);
+	value = cf->args->elts;
 
-		n = ngx_http_script_variables_count(query);
+	for (i = 0; i < cf->args->nelts - 1; i++) {
 
-		ngx_memzero(&sc, sizeof(ngx_http_script_compile_t));
+		mtlcf[i].sql = value[i + 1];
 
-		sc.cf = cf;
-		sc.source = query;
-		sc.lengths = &mslcf->query_lengths;
-		sc.values = &mslcf->query_values;
-		sc.variables = n;
-		sc.complete_lengths = 1;
-		sc.complete_values = 1;
+		if (mtlcf[i].sql.data[mtlcf[i].sql.len - 1] == '/') {
+			mtlcf[i].sql.len--;
+			mtlcf[i].sql.data[mtlcf[i].sql.len] = '\0';
+		}
 
+		n = ngx_http_script_variables_count(&mtlcf[i].sql);
 
-		if (ngx_http_script_compile(&sc) != NGX_OK)
-			return NGX_CONF_ERROR;
+		if (n) {
+			ngx_memzero(&sc, sizeof(ngx_http_script_compile_t));
+
+			sc.cf = cf;
+			sc.source = &mtlcf[i].sql;
+			sc.lengths = &mtlcf[i].query_lengths;
+			sc.values = &mtlcf[i].query_values;
+			sc.variables = n;
+			sc.complete_lengths = 1;
+			sc.complete_values = 1;
+
+			if (ngx_http_script_compile(&sc) != NGX_OK) {
+				return NGX_CONF_ERROR;
+			}
+
+		} else {
+			/* add trailing '\0' to length */
+			mtlcf[i].sql.len++;
+		}
 	}
 
 	return NGX_CONF_OK;
