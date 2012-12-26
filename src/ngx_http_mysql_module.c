@@ -226,6 +226,7 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 	ngx_http_mysql_srv_conf_t *msscf;
 	ngx_str_t query;
 	ngx_str_t trans_lev = ngx_string("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED");
+	ngx_str_t rollback = ngx_string("ROLLBACK");
 	MYSQL mysql, *sock;
 	ngx_chain_t *out;
 	ngx_http_mysql_node_t *mnode;
@@ -376,11 +377,19 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 
 		ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "transaction_sql query[%d]:%V", i, &query); 
 
-		if (mysql_real_query(sock, NGXCSTR(query), query.len)) {
+		if (mysql_real_query(sock, NGXCSTR(query), query.len)) 
+		{
 
 			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
 					"MySQL read_query failed (%s)",
 					mysql_error(sock));
+			
+			if (mysql_real_query(sock, NGXCSTR(rollback), rollback.len))
+			{
+				ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
+						"MySQL read_query failed (%s)",
+						mysql_error(sock));
+			}
 
 			goto quit;
 		}
