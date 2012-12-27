@@ -18,19 +18,10 @@
 #define NGXCSTR(s) ((s).data ? strndupa((char*)(s).data, (s).len) : NULL)
 
 
-typedef struct {
-	ngx_chain_t *response;
-	ngx_int_t var_cols;
-	ngx_int_t var_rows;
-	ngx_int_t var_affected;
-	ngx_str_t var_query;
-	ngx_array_t *variables;
-	ngx_int_t status;
-	ngx_int_t errcode;
-	ngx_int_t insert_id;
-	ngx_str_t errstr;
-} ngx_mysql_ctx_t;
+extern ngx_module_t ngx_http_mysql_module;
 
+typedef ngx_int_t (*ngx_mysql_output_handler_pt)
+	    (ngx_http_request_t *, MYSQL_RES *);
 
 typedef struct ngx_http_mysql_trans_loc_conf_s{
 	ngx_array_t *query_lengths;
@@ -49,6 +40,9 @@ struct ngx_http_mysql_loc_conf_s {
 
 	/* for transaction*/
 	ngx_http_mysql_trans_loc_conf_t *transaction_sqls;
+
+	/* fro output */
+	ngx_mysql_output_handler_pt output_handler;
 };
 
 typedef struct ngx_http_mysql_loc_conf_s ngx_http_mysql_loc_conf_t;
@@ -89,22 +83,34 @@ struct ngx_http_mysql_ctx_s {
 
 	ngx_chain_t *subreq_out;
 
+	/* for rd_json output_handler */
+	ngx_chain_t *response;
+	ngx_int_t var_cols;
+	ngx_int_t var_rows;
+	ngx_int_t var_affected;
+	ngx_str_t var_query;
+	ngx_array_t *variables;
+	ngx_int_t status;
+	ngx_int_t errcode;
+	ngx_int_t insert_id;
+	const char* errstr;
+	//ngx_st_t errstr;
 };
 
 typedef struct ngx_http_mysql_ctx_s ngx_http_mysql_ctx_t;
 
-static void* ngx_http_mysql_create_srv_conf(ngx_conf_t *cf);
-static char* ngx_http_mysql_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
+void* ngx_http_mysql_create_srv_conf(ngx_conf_t *cf);
+char* ngx_http_mysql_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
 
-static void* ngx_http_mysql_create_loc_conf(ngx_conf_t *cf);
-static char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
+void* ngx_http_mysql_create_loc_conf(ngx_conf_t *cf);
+char* ngx_http_mysql_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 
-static char* ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
-static char* ngx_http_mysql_transaction(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
-static char* ngx_http_mysql_subrequest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
-static char* ngx_http_mysql_escape(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+char* ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+char* ngx_http_mysql_transaction(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+char* ngx_http_mysql_subrequest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+char* ngx_http_mysql_escape(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
-static ngx_int_t ngx_http_mysql_init(ngx_conf_t *cf);
+ngx_int_t ngx_http_mysql_init(ngx_conf_t *cf);
 
 #endif /* _NGX_MYSQL_MODULE_H_ */
 

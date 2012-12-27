@@ -14,7 +14,7 @@
 
 #   if (NGX_HAVE_VARIADIC_MACROS)
 
-#       define dd(...) fprintf(stderr, "postgres *** %s: ", __func__); \
+#       define dd(...) fprintf(stderr, "[mx_mysql] *** %s: ", __func__); \
 	fprintf(stderr, __VA_ARGS__); \
 fprintf(stderr, " *** %s line %d.\n", __FILE__, __LINE__)
 

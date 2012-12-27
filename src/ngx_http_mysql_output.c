@@ -6,14 +6,14 @@
  *          ************************************************************************/
 
 #ifndef DDEBUG
-#define DDEBUG 0
+#define DDEBUG 1
 #endif
 
 #include "ngx_http_mysql_ddebug.h"
-#include "ngx_http_mysql_module.h"
 #include "ngx_http_mysql_output.h"
 
 
+/*
 ngx_int_t ngx_mysql_output_value(ngx_http_request_t *r, MYSQL_RES *res){
     ngx_mysql_ctx_t        *msqlctx;
     ngx_http_core_loc_conf_t  *clcf;
@@ -23,7 +23,7 @@ ngx_int_t ngx_mysql_output_value(ngx_http_request_t *r, MYSQL_RES *res){
 
     dd("entering");
 
-    msqlctx = ngx_http_get_module_ctx(r, ngx_mysql_module);
+    msqlctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
 
     if ((msqlctx->var_rows != 1) || (msqlctx->var_cols != 1)) {
         clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
@@ -88,7 +88,7 @@ ngx_int_t ngx_mysql_output_value(ngx_http_request_t *r, MYSQL_RES *res){
 
     cl->next = NULL;
 
-    /* set output response */
+    // set output response 
     msqlctx->response = cl;
 
     dd("returning NGX_DONE");
@@ -106,12 +106,12 @@ ngx_mysql_output_text(ngx_http_request_t *r, MYSQL_RES *res)
 
     dd("entering");
 
-    msqlctx = ngx_http_get_module_ctx(r, ngx_mysql_module);
+    msqlctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
 
     col_count = msqlctx->var_cols;
     row_count = msqlctx->var_rows;
 
-    /* pre-calculate total length up-front for single buffer allocation */
+    // pre-calculate total length up-front for single buffer allocation 
     size = 0;
 
     for (row = 0; row < row_count; row++) {
@@ -119,12 +119,12 @@ ngx_mysql_output_text(ngx_http_request_t *r, MYSQL_RES *res)
             if (PQgetisnull(res, row, col)) {
                 size += sizeof("(null)") - 1;
             } else {
-                size += PQgetlength(res, row, col);  /* field string data */
+                size += PQgetlength(res, row, col); // field string data 
             }
         }
     }
 
-    size += row_count * col_count - 1;               /* delimiters */
+    size += row_count * col_count - 1;               //delimiters 
 
     if ((row_count == 0) || (size == 0)) {
         dd("returning NGX_DONE (empty result)");
@@ -147,7 +147,7 @@ ngx_mysql_output_text(ngx_http_request_t *r, MYSQL_RES *res)
     b->memory = 1;
     b->tag = r->upstream->output.tag;
 
-    /* fill data */
+    // fill data 
     for (row = 0; row < row_count; row++) {
         for (col = 0; col < col_count; col++) {
             if (PQgetisnull(res, row, col)) {
@@ -173,22 +173,23 @@ ngx_mysql_output_text(ngx_http_request_t *r, MYSQL_RES *res)
 
     cl->next = NULL;
 
-    /* set output response */
+    // set output response 
     msqlctx->response = cl;
 
     dd("returning NGX_DONE");
     return NGX_DONE;
 }
+*/
 
 ngx_int_t ngx_mysql_output_rds(ngx_http_request_t *r, MYSQL_RES *res)
 {
-    ngx_mysql_ctx_t  *msqlctx;
+    ngx_http_mysql_ctx_t  *msqlctx;
     ngx_chain_t         *first, *last;
     ngx_int_t            col_count, row_count, aff_count, row, errcode, insert_id;
-	ngx_str_t errstr;
 	MYSQL_FIELD *fields;
 	MYSQL_ROW val;
 	ngx_uint_t *lengths;
+	const char *errs = "";
 
     dd("entering");
 
@@ -199,21 +200,24 @@ ngx_int_t ngx_mysql_output_rds(ngx_http_request_t *r, MYSQL_RES *res)
     aff_count = (msqlctx->var_affected == NGX_ERROR) ? 0 : msqlctx->var_affected;
 	errcode = msqlctx->errcode;
 	insert_id = msqlctx->insert_id;
-	errstr = msqlctx->errstr;
-	fields = mysql_fetch_fields(res);
+	if (NULL != msqlctx->errstr)
+		errs = msqlctx->errstr;
 
+	dd("errcode(%d),errs(%s)", (int)errcode, msqlctx->errstr);
 
     /* render header */
-    first = last = ngx_mysql_render_rds_header(r, r->pool, col_count, aff_count, NGXCSTR(errstr), errcode, insert_id);
+    first = last = ngx_mysql_render_rds_header(r, r->pool, col_count, aff_count, errs, errcode, insert_id);
 
     if (last == NULL) {
         dd("returning NGX_ERROR");
         return NGX_ERROR;
     }
 
-    if (!errno) {
+    if (!errno || NULL == res) {
         goto done;
     }
+
+	fields = mysql_fetch_fields(res);
 
     /* render columns */
     last->next = ngx_mysql_render_rds_columns(r, r->pool, fields, col_count);
@@ -263,7 +267,7 @@ done:
 }
 
 ngx_chain_t * ngx_mysql_render_rds_header(ngx_http_request_t *r, ngx_pool_t *pool,
-		 ngx_uint_t col_count, ngx_uint_t aff_count, char* errstr, ngx_uint_t errcode, ngx_uint_t insert_id)
+		 ngx_int_t col_count, ngx_int_t aff_count, const char* errstr, ngx_int_t errcode, ngx_int_t insert_id)
 {
     ngx_chain_t  *cl;
     ngx_buf_t    *b;
@@ -271,6 +275,9 @@ ngx_chain_t * ngx_mysql_render_rds_header(ngx_http_request_t *r, ngx_pool_t *poo
     size_t        errstr_len;
 
     dd("entering");
+
+	//dd("errcode(%d), errstr(%s", (uint16_t)errcode, errstr);
+	dd("errcode(%d), col_count(%d), aff_count(%d), insert_id(%d)", (uint16_t)errcode, (int)col_count, (int)aff_count, (int)insert_id);
 
     errstr_len = ngx_strlen(errstr);
 
@@ -300,7 +307,7 @@ ngx_chain_t * ngx_mysql_render_rds_header(ngx_http_request_t *r, ngx_pool_t *poo
 
     cl->buf = b;
     b->memory = 1;
-    b->tag = r->upstream->output.tag;
+    //b->tag = r->upstream->output.tag;
 
     /* fill data */
 #if NGX_HAVE_LITTLE_ENDIAN
@@ -314,7 +321,7 @@ ngx_chain_t * ngx_mysql_render_rds_header(ngx_http_request_t *r, ngx_pool_t *poo
 
     *b->last++ = 0;
 
-    *(uint16_t *) b->last = (uint16_t) 0;
+    *(uint16_t *) b->last = (uint16_t) errcode;
     b->last += sizeof(uint16_t);
 
     *(uint16_t *) b->last = (uint16_t) errcode;
@@ -352,7 +359,7 @@ ngx_chain_t * ngx_mysql_render_rds_columns(ngx_http_request_t *r, ngx_pool_t *po
     ngx_buf_t    *b;
     size_t        size;
     ngx_int_t     col;
-    enum_field_types           col_type;
+    enum enum_field_types           col_type;
     char         *col_name;
     size_t        col_name_len;
 
@@ -383,7 +390,7 @@ ngx_chain_t * ngx_mysql_render_rds_columns(ngx_http_request_t *r, ngx_pool_t *po
 
     cl->buf = b;
     b->memory = 1;
-    b->tag = r->upstream->output.tag;
+    //b->tag = r->upstream->output.tag;
 
     /* fill data */
     for (col = 0; col < col_count; col++) {
@@ -433,7 +440,7 @@ ngx_mysql_render_rds_row(ngx_http_request_t *r, ngx_pool_t *pool,
     }
 
     for (col = 0; col < col_count; col++) {
-        size += lengths[col]  /* field string data */
+        size += lengths[col];  /* field string data */
     }
 
     b = ngx_create_temp_buf(pool, size);
@@ -450,7 +457,7 @@ ngx_mysql_render_rds_row(ngx_http_request_t *r, ngx_pool_t *pool,
 
     cl->buf = b;
     b->memory = 1;
-    b->tag = r->upstream->output.tag;
+    //b->tag = r->upstream->output.tag;
 
     /* fill data */
     *b->last++ = (uint8_t) 1; /* valid row */
@@ -505,7 +512,7 @@ ngx_mysql_render_rds_row_terminator(ngx_http_request_t *r, ngx_pool_t *pool)
 
     cl->buf = b;
     b->memory = 1;
-    b->tag = r->upstream->output.tag;
+    //b->tag = r->upstream->output.tag;
 
     /* fill data */
     *b->last++ = (uint8_t) 0; /* row terminator */
@@ -522,10 +529,10 @@ ngx_mysql_render_rds_row_terminator(ngx_http_request_t *r, ngx_pool_t *pool)
 ngx_int_t
 ngx_mysql_output_chain(ngx_http_request_t *r, ngx_chain_t *cl)
 {
-    ngx_http_upstream_t       *u = r->upstream;
+    //ngx_http_upstream_t       *u = r->upstream;
     ngx_http_core_loc_conf_t  *clcf;
-    ngx_mysql_loc_conf_t   *pglcf;
-    ngx_mysql_ctx_t        *msqlctx;
+    ngx_http_mysql_loc_conf_t   *msqlcf;
+    ngx_http_mysql_ctx_t        *msqlctx;
     ngx_int_t                  rc;
 
     dd("entering");
@@ -533,18 +540,18 @@ ngx_mysql_output_chain(ngx_http_request_t *r, ngx_chain_t *cl)
     if (!r->header_sent) {
         ngx_http_clear_content_length(r);
 
-        pglcf = ngx_http_get_module_loc_conf(r, ngx_mysql_module);
-        msqlctx = ngx_http_get_module_ctx(r, ngx_mysql_module);
+        msqlcf = ngx_http_get_module_loc_conf(r, ngx_http_mysql_module);
+        msqlctx = ngx_http_get_module_ctx(r, ngx_http_mysql_module);
 
         r->headers_out.status = msqlctx->status ? abs(msqlctx->status)
                                               : NGX_HTTP_OK;
 
-        if (pglcf->output_handler == &ngx_mysql_output_rds) {
+        if (msqlcf->output_handler == &ngx_mysql_output_rds) {
             /* RDS for output rds */
             r->headers_out.content_type.data = (u_char *) rds_content_type;
             r->headers_out.content_type.len = rds_content_type_len;
             r->headers_out.content_type_len = rds_content_type_len;
-        } else if (pglcf->output_handler != NULL) {
+        } else if (msqlcf->output_handler != NULL) {
             /* default type for output value|row */
             clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
@@ -576,14 +583,14 @@ ngx_mysql_output_chain(ngx_http_request_t *r, ngx_chain_t *cl)
     ngx_chain_update_chains(r->pool, &u->free_bufs, &u->busy_bufs, &cl,
                             u->output.tag);
 #else
-    ngx_chain_update_chains(&u->free_bufs, &u->busy_bufs, &cl, u->output.tag);
+//ngx_chain_update_chains(&u->free_bufs, &u->busy_bufs, &cl, u->output.tag);
 #endif
 
     dd("returning rc:%d", (int) rc);
     return rc;
 }
 
-rds_col_type_t ngx_mysql_rds_col_type(enum_field_types col_type)
+rds_col_type_t ngx_mysql_rds_col_type(enum enum_field_types col_type)
 {
     switch (col_type) {
     case MYSQL_TYPE_LONGLONG: /* int8 */
@@ -603,7 +610,7 @@ rds_col_type_t ngx_mysql_rds_col_type(enum_field_types col_type)
     case MYSQL_TYPE_LONG: /* int4 */
         return rds_col_type_integer;
     case MYSQL_TYPE_DECIMAL: /* numeric */
-    case MYSQL_TYPE_NEWDECIMALL: /* new numeric */
+    case MYSQL_TYPE_NEWDECIMAL: /* new numeric */
         return rds_col_type_decimal;
     case MYSQL_TYPE_FLOAT: /* float4 */
         return rds_col_type_real;
