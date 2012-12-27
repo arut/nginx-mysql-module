@@ -1,18 +1,21 @@
 nginx-mysql-module
 
 (c) 2012 Arutyunyan Roman (arut@qip.ru)
+(c) 2012 DenoFiend zhao (denofiend@gmail.com) (add transaction support in mysql)
 
 == MySQL support in NGINX ==
 
 * this module is asynchronous (non-blocking)
+* this module support transaction in mysql
+* this module response is generated in rds format, so it's compatible with ngx_rds_json.
 * requires nginx-mtask-module (https://github.com/arut/nginx-mtask-module)
 * requires standard MySQL client shared library libmysqlclient.so
+* requires ngx_rds_json module(https://github.com/denofiend/rds-json-nginx-module)
 
 
 NGINX configure:
 
-./configure --add-module=/home/rarutyunyan/nginx-mtask-module --add-module=/home/rarutyunyan/nginx-mysql-module
-
+./configure --add-module=/path/to/nginx-mysql-module/ --add-module=/path/to/nginx-mtask-module/ --add-module=/path/to/rds-json-nginx-module/
 
 Usage examples:
 
@@ -25,6 +28,15 @@ MySQL:
 			`id` int(11) NOT NULL auto_increment,  PRIMARY KEY (`id`)
 	) ENGINE=MyISAM DEFAULT CHARSET=utf8;
 
+	CREATE TABLE `a` (
+			`id` int(11) NOT NULL DEFAULT '0',
+			PRIMARY KEY (`id`)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8; 
+
+	CREATE TABLE `b` (
+			`id` bigint(20) NOT NULL,
+			`name` varchar(128) NOT NULL
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 nginx.conf:
 
@@ -57,6 +69,22 @@ http {
 		mysql_multi on;
 
 		mtask_stack 65536;
+
+		
+		#transaction location conf
+		location  /test/select {
+
+			mysql_query "SELECT a.`id`, b.`name` from  a,  b where a.`id` = b.`id` limit 3";
+
+			rds_json on;
+			rds_json_root ids;
+
+		}
+		location /test/insert {
+
+			mysql_transaction "BEGIN" "INSERT INTO `a` values('$arg_id')"  "INSERT INTO `b` values('$arg_id', '$arg_val')" "COMMIT";
+			rds_json on;
+		}
 
 
 		location ~ /all {
@@ -137,6 +165,14 @@ http {
 
 
 access:
+ curl 'http://localhost:8080/test/insert?id=1&val=test_case_1'
+ {"errcode":0}
+ 
+ curl 'http://localhost:8080/test/insert?id=2&val=test_case_2'
+ {"errcode":0}
+
+ curl 'http://localhost:8080/test/select'
+ {"ids":[{"id":1,"name":"test_case_1"},{"id":2,"name":"test_case_2"}]}
 
  curl 'localhost:8080/insert?name=foo'
  11
