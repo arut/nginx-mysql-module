@@ -124,6 +124,7 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 		sock = &mysql;
 	}
 
+
 	if (mnode == NULL || !mnode->ready) {
 
 		ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, 
@@ -267,17 +268,6 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 		}
 	}
 
-	ret = ngx_http_mysql_process_response(r);
-
-	if (ret != NGX_DONE)
-	{
-		goto quit;
-	}
-
-	ctx->current = NULL;
-
-	return ngx_mysql_output_chain(r, ctx->response);
-
 quit:
 
 	if (mnode != NULL) {
@@ -295,6 +285,8 @@ quit:
 	}
 
 	ngx_http_mysql_process_response(r);
+
+	ctx->current = NULL;
 
 	return ngx_mysql_output_chain(r, ctx->response);
 }
@@ -333,6 +325,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 	sock = NULL;
 	mnode = NULL;
 	ret = NGX_ERROR;
+
 
 	if (msscf->max_conn != NGX_CONF_UNSET 
 			&& msscf->max_conn) 
@@ -435,14 +428,6 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 		goto quit;
 	}
 
-	ret = ngx_http_mysql_process_response(r);
-
-	if (ret != NGX_DONE)
-	{
-		goto quit;
-	}
-
-	return ngx_mysql_output_chain(r, ctx->response);
 
 quit:
 
@@ -454,13 +439,10 @@ quit:
 	} else if (sock != NULL)
 		mysql_close(sock);
 
-	if (r->subrequest_in_memory) {
-
-		ctx->subreq_out = ctx->response;
-	}
-
-
 	ngx_http_mysql_process_response(r);
+
+	ctx->current = NULL;
+
 	return ngx_mysql_output_chain(r, ctx->response);
 }
 

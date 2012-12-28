@@ -229,6 +229,10 @@ ngx_int_t ngx_http_mysql_get_escaped_variable(ngx_http_request_t *r,
 
 void* ngx_http_mysql_create_srv_conf(ngx_conf_t *cf)
 {
+	ngx_log_error(NGX_LOG_INFO, cf->log, 0, 
+			"nxg_http_mysql_create_src_conf");
+
+
 	ngx_http_mysql_srv_conf_t *conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_mysql_srv_conf_t));
 	
 	conf->port = NGX_CONF_UNSET;
@@ -373,6 +377,8 @@ char* ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
 char* ngx_http_mysql_transaction(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
+	ngx_log_debug0(NGX_LOG_INFO, cf->log, 0, "mysql transaction");
+
 	ngx_http_mysql_loc_conf_t *mslcf = conf;
 	ngx_http_mtask_loc_conf_t *mlcf;
 	ngx_uint_t n;
