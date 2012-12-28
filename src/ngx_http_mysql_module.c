@@ -10,6 +10,7 @@
 #include "ngx_http_mysql_ddebug.h"
 #include "ngx_http_mysql_handler.h"
 
+#define NGX_CONF_TAKE34567 (NGX_CONF_TAKE3|NGX_CONF_TAKE4|NGX_CONF_TAKE5|NGX_CONF_TAKE6|NGX_CONF_TAKE7)  
 
 static ngx_command_t ngx_http_mysql_commands[] = {
 
@@ -97,14 +98,14 @@ static ngx_command_t ngx_http_mysql_commands[] = {
 		NULL },
 
 	{	ngx_string("mysql_escape"),
-		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE2,
+		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE1234,
 		ngx_http_mysql_escape,
 		NGX_HTTP_LOC_CONF_OFFSET,
 		0,
 		NULL },
 	
 	{	ngx_string("mysql_transaction"),
-		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE1234,
+		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE34567,
 		ngx_http_mysql_transaction,
 		NGX_HTTP_LOC_CONF_OFFSET,
 		0,
@@ -394,7 +395,6 @@ char* ngx_http_mysql_transaction(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 	if (mtlcf == NULL) {
 		return NGX_CONF_ERROR;
 	}
-	
 
 	mslcf->transaction_sqls = mtlcf;
 	mtlcf->len = cf->args->nelts;
