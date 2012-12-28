@@ -11,6 +11,21 @@
 #include "ngx_http_mysql_ddebug.h"
 #include <mysql.h>
 
+
+ngx_str_t* ngx_strdup(ngx_pool_t *pool, ngx_str_t* dst, const char* src, size_t len)
+{
+	dst->data = ngx_pnalloc(pool, len);
+	dst->len = len;
+
+	if (dst->data == NULL) {
+		return NULL;
+	}
+
+	ngx_memcpy(dst->data, src, len);
+
+	return dst;
+}
+
 ngx_int_t ngx_http_mysql_process_response(ngx_http_request_t *r){
 
         ngx_http_mysql_loc_conf_t      *mysqlcf;
@@ -64,6 +79,7 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 	ngx_int_t ret;
 	ngx_uint_t i;
 	ngx_str_t query;
+	const char* errs;
 
 	msscf = ngx_http_get_module_srv_conf(r, ngx_http_mysql_module);
 
@@ -124,12 +140,14 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 						NULL,
 						msscf->multi == 1 ? CLIENT_MULTI_STATEMENTS : 0))) 
 		{
-			ctx->errstr = mysql_error(sock);
+
+			/* for output errs, erro */
+			errs = mysql_error(sock);
+			ngx_strdup(r->connection->pool, &ctx->errstr, errs, strlen(errs));
 			ctx->errcode = mysql_errno(sock);
 
 			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
-					"couldn't connect to MySQL engine: %s",
-					ctx->errstr);
+					"couldn't connect to MySQL engine: %s", errs);
 
 			goto quit;
 		}
@@ -138,12 +156,13 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 		if (msscf->charset.len 
 				&& mysql_set_character_set(sock, NGXCSTR(msscf->charset)))
 		{
-			ctx->errstr = mysql_error(sock);
+			/* for output errs, erro */
+			errs = mysql_error(sock);
+			ngx_strdup(r->connection->pool, &ctx->errstr, errs, strlen(errs));
 			ctx->errcode = mysql_errno(sock);
 
 			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
-					"error setting MySQL charset: %s",
-					ctx->errstr);
+					"error setting MySQL charset: %s", errs);
 
 			goto quit;
 		}
@@ -158,11 +177,13 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 		/*set auto_commit*/
 		if (0 != mysql_autocommit(sock, msscf->mysql_auto_commit))
 		{
-			ctx->errstr = mysql_error(sock);
+			/* for output errs, erro */
+			errs = mysql_error(sock);
+			ngx_strdup(r->connection->pool, &ctx->errstr, errs, strlen(errs));
 			ctx->errcode = mysql_errno(sock);
 
 			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
-					"error setting MySQL auto_commit: %s", ctx->errstr);
+					"error setting MySQL auto_commit: %s", errs);
 
 			goto quit;
 		}
@@ -170,12 +191,13 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 		/* set TRANSACTION_REPEATABLE_READ to trans level*/
 		if (0 != mysql_real_query(sock, NGXCSTR(trans_lev), trans_lev.len))
 		{
-			ctx->errstr = mysql_error(sock);
+			/* for output errs, erro */
+			errs = mysql_error(sock);
+			ngx_strdup(r->connection->pool, &ctx->errstr, errs, strlen(errs));
 			ctx->errcode = mysql_errno(sock);
 
 			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
-					"error setting MySQL transaction level: %s",
-					ctx->errstr);
+					"error setting MySQL transaction level: %s", errs);
 
 			goto quit;
 		}
@@ -219,29 +241,28 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 		if (mysql_real_query(sock, NGXCSTR(query), query.len)) 
 		{
 
-			ctx->errstr = mysql_error(sock);
+			/* for output errs, erro */
+			errs = mysql_error(sock);
+			ngx_strdup(r->connection->pool, &(ctx->errstr), errs, strlen(errs));
 			ctx->errcode = mysql_errno(sock);
 
-			dd("ctx->errstr(%s)", ctx->errstr);
-
 			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
-					"MySQL read_query failed (%s)",
-					ctx->errstr);
+					"MySQL read_query failed (%V)", &(ctx->errstr));
 			
 			ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "transaction_sql query[%d]:%s", i+1, "ROLL_BACK"); 
 
-			/*
+			
 			if (mysql_rollback(sock))
 			{
-				ctx->errstr = mysql_error(sock);
+				/* for output errs, erro */
+				errs = mysql_error(sock);
+				ngx_strdup(r->connection->pool, &ctx->errstr, errs, strlen(errs));
 				ctx->errcode = mysql_errno(sock);
 
 				ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
-						"MySQL roll_back failed (%s)",
-						ctx->errstr);
+						"MySQL roll_back failed (%s)", errs);
 			}
 
-			*/
 			goto quit;
 		}
 	}
@@ -252,6 +273,8 @@ ngx_int_t ngx_http_mysql_transaction_handler(ngx_http_request_t *r){
 	{
 		goto quit;
 	}
+
+	ctx->current = NULL;
 
 	return ngx_mysql_output_chain(r, ctx->response);
 
@@ -292,6 +315,7 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 	ngx_http_mysql_node_t *mnode;
 	ngx_int_t ret;
 	ngx_http_mysql_ctx_t *ctx;
+	const char* errs;
 
 	msscf = ngx_http_get_module_srv_conf(r, ngx_http_mysql_module);
 	
@@ -353,9 +377,13 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 						msscf->multi == 1 ? CLIENT_MULTI_STATEMENTS : 0))) 
 		{
 
+			/* for output errs, erro */
+			errs = mysql_error(sock);
+			ngx_strdup(r->connection->pool, &ctx->errstr, errs, strlen(errs));
+			ctx->errcode = mysql_errno(sock);
+
 			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
-					"couldn't connect to MySQL engine: %s",
-					mysql_error(sock));
+					"couldn't connect to MySQL engine: %s", errs);
 
 			goto quit;
 		}
@@ -363,9 +391,13 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 		if (msscf->charset.len 
 				&& mysql_set_character_set(sock, NGXCSTR(msscf->charset)))
 		{
+			/* for output errs, erro */
+			errs = mysql_error(sock);
+			ngx_strdup(r->connection->pool, &ctx->errstr, errs, strlen(errs));
+			ctx->errcode = mysql_errno(sock);
+
 			ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
-					"error setting MySQL charset: %s",
-					mysql_error(sock));
+					"error setting MySQL charset: %s", errs);
 
 			goto quit;
 		}
@@ -392,9 +424,13 @@ ngx_int_t ngx_http_mysql_handler(ngx_http_request_t *r) {
 
 	if (mysql_query(sock, NGXCSTR(query))) {
 
+		/* for output errs, erro */
+		errs = mysql_error(sock);
+		ngx_strdup(r->connection->pool, &ctx->errstr, errs, strlen(errs));
+		ctx->errcode = mysql_errno(sock);
+
 		ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0, 
-				"MySQL query failed (%s)",
-				mysql_error(sock));
+				"MySQL query failed (%s)", errs);
 
 		goto quit;
 	}

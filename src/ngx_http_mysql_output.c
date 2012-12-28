@@ -11,6 +11,7 @@
 
 #include "ngx_http_mysql_ddebug.h"
 #include "ngx_http_mysql_output.h"
+#include "ngx_http_mysql_module.h"
 
 
 /*
@@ -200,10 +201,10 @@ ngx_int_t ngx_mysql_output_rds(ngx_http_request_t *r, MYSQL_RES *res)
     aff_count = (msqlctx->var_affected == NGX_ERROR) ? 0 : msqlctx->var_affected;
 	errcode = msqlctx->errcode;
 	insert_id = msqlctx->insert_id;
-	if (NULL != msqlctx->errstr)
-		errs = msqlctx->errstr;
+	if (NULL != msqlctx->errstr.data)
+		errs = NGXCSTR(msqlctx->errstr);
 
-	dd("errcode(%d),errs(%s)", (int)errcode, msqlctx->errstr);
+	dd("errcode(%d),errs(%s)", (int)errcode, errs);
 
     /* render header */
     first = last = ngx_mysql_render_rds_header(r, r->pool, col_count, aff_count, errs, errcode, insert_id);

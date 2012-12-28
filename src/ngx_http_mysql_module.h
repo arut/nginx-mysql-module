@@ -93,8 +93,7 @@ struct ngx_http_mysql_ctx_s {
 	ngx_int_t status;
 	ngx_int_t errcode;
 	ngx_int_t insert_id;
-	const char* errstr;
-	//ngx_st_t errstr;
+	ngx_str_t errstr;
 };
 
 typedef struct ngx_http_mysql_ctx_s ngx_http_mysql_ctx_t;
