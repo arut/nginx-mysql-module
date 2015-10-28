@@ -662,6 +662,7 @@ static char* ngx_http_mysql_merge_srv_conf(ngx_conf_t *cf, void *parent, void *c
 {
 	ngx_http_mysql_srv_conf_t *prev = parent;
 	ngx_http_mysql_srv_conf_t *conf = child;
+	ngx_pool_cleanup_t *cp;
 	ngx_int_t n;
 
 	ngx_log_debug0(NGX_LOG_INFO, cf->log, 0, "mysql merge srv");
@@ -865,7 +866,7 @@ static void ngx_http_mysql_cleanup(void *data)
 	nodes = (ngx_http_mysql_node_t *)data;
 	for (p = nodes; p; p = p->next) {
 		if (p->ready) {
-			mysql_close(p->mysql);
+			mysql_close(&p->mysql);
 		}
 	}
 }
