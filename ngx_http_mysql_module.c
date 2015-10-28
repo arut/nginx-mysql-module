@@ -49,6 +49,8 @@ static char* ngx_http_mysql_query(ngx_conf_t *cf, ngx_command_t *cmd, void *conf
 static char* ngx_http_mysql_subrequest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char* ngx_http_mysql_escape(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
+static void ngx_http_mysql_cleanup(void *data);
+
 static ngx_int_t ngx_http_mysql_init(ngx_conf_t *cf);
 
 struct ngx_http_mysql_loc_conf_s {
@@ -687,9 +689,15 @@ static char* ngx_http_mysql_merge_srv_conf(ngx_conf_t *cf, void *parent, void *c
 
 		conf->free_node = conf->nodes;
 
-		for(n = 0; n < conf->max_conn - 1; ++n)
+		for (n = 0; n < conf->max_conn - 1; ++n)
 			conf->nodes[n].next = conf->nodes + n + 1;
 
+		cp = ngx_pool_cleanup_add(cf->pool, 0);
+		if (cp == NULL) {
+			return NGX_CONF_ERROR;
+		}
+		cp->handler = ngx_http_mysql_cleanup;
+		cp->data    = conf->nodes;
 	} else if (prev->max_conn != NGX_CONF_UNSET) {
 
 		conf->max_conn = prev->max_conn;
@@ -848,6 +856,18 @@ static char* ngx_http_mysql_escape(ngx_conf_t *cf, ngx_command_t *cmd, void *con
 	v->data = (uintptr_t)index;
 
 	return NGX_CONF_OK;
+}
+
+static void ngx_http_mysql_cleanup(void *data)
+{
+	ngx_http_mysql_node_t *p, *nodes;
+
+	nodes = (ngx_http_mysql_node_t *)data;
+	for (p = nodes; p; p = p->next) {
+		if (p->ready) {
+			mysql_close(p->mysql);
+		}
+	}
 }
 
 static ngx_int_t ngx_http_mysql_init(ngx_conf_t *cf) 
